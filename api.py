@@ -292,13 +292,20 @@ async def h_pip_install(request):
 async def h_pip_uninstall(request):
     try:
         body = await _body(request)
-        name = body.get("package") or ""
+        names = body.get("packages")
+        if not names and body.get("package"):
+            names = [body.get("package")]
+        if not names or not isinstance(names, list):
+            return _err("未指定要卸载的包", 400)
         # 核心包保护：卸了 ComfyUI 会崩的包直接拒绝
         cores = envinfo.core_packages()
-        name_only = (envinfo.split_requirement(name)[0] or name)
-        if envinfo._canon(name_only) in cores:
-            return _err("「%s」是 ComfyUI 核心依赖，禁止卸载" % name_only, 403)
-        result = pkgmgr.uninstall_package(name_only)
+        cleaned = []
+        for n in names:
+            name_only = envinfo.split_requirement(str(n))[0] or str(n)
+            if envinfo._canon(name_only) in cores:
+                return _err("「%s」是 ComfyUI 核心依赖，禁止卸载" % name_only, 403)
+            cleaned.append(name_only)
+        result = pkgmgr.uninstall_packages(cleaned)
         if "error" in result:
             return _err(result["error"], 400)
         return _json({"status": "ok", "data": result})

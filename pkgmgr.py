@@ -65,11 +65,23 @@ def install_packages(packages):
 
 
 def uninstall_package(name):
-    """pip uninstall 单个包"""
-    v = _validate_package(name)
-    if not v:
-        return {"error": "非法的包名: %r" % (name,)}
-    return _run(["uninstall", "-y", "--disable-pip-version-check", v])
+    """pip uninstall 单个包（兼容旧接口）"""
+    return uninstall_packages([name])
+
+
+def uninstall_packages(names):
+    """pip uninstall 多个包（一条命令批量执行）"""
+    pkgs = []
+    for n in names or []:
+        v = _validate_package(n)
+        if not v:
+            return {"error": "非法的包名: %r" % (n,)}
+        pkgs.append(v)
+    if not pkgs:
+        return {"error": "未指定要卸载的包"}
+    if len(pkgs) > 30:
+        return {"error": "单次最多卸载 30 个包"}
+    return _run(["uninstall", "-y", "--disable-pip-version-check"] + pkgs)
 
 
 def _run(args):

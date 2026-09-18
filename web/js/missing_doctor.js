@@ -15,6 +15,7 @@ const MD = {
     agedSort: "oldest",
     cleanupPreview: null,
     outputDays: 0,
+    heavyItems: null,
 };
 
 // ---------------------------------------------------------------- 工具函数
@@ -985,40 +986,85 @@ function renderEnvTab(body) {
     }
 
     // ---------- 重量级包 ----------
+    function renderHeavy(notice) {
+        const items = MD.heavyItems || [];
+        heavyBox.innerHTML = "";
+        if (notice) heavyBox.appendChild(notice);
+        heavyBox.appendChild(el("div", { class: "md-row" }, [
+            el("span", { class: "md-pill info", text: `展示占用 Top ${items.length}` }),
+            el("button", { class: "md-btn ghost", text: "🔄 重新统计（精确大小）", title: "全量扫描 site-packages，需几秒到几十秒",
+                onclick: () => loadHeavy(true) }),
+            el("button", { class: "md-btn ghost", text: "全选/反选（可卸载项）", onclick: () => {
+                const boxes = [...heavyBox.querySelectorAll("input.md-check")];
+                const all = boxes.length && boxes.every(b => b.checked);
+                boxes.forEach(b => (b.checked = !all));
+            } }),
+            el("button", { class: "md-btn danger", text: "🗑 卸载选中", onclick: async () => {
+                const names = [...heavyBox.querySelectorAll("input.md-check:checked")].map(c => c.dataset.name);
+                if (!names.length) { alert("请先勾选要卸载的包"); return; }
+                const total = names.reduce((s, n) => s + ((MD.heavyItems || []).find(p => p.name === n) || {}).size, 0);
+                if (!confirm(`确认卸选中的 ${names.length} 个包吗？\n\n${names.join("、")}\n\n一次性 pip uninstall，完成后列表即时更新。`)) return;
+                try {
+                    await mdFetch("/md/pip_uninstall", { method: "POST", body: { packages: names } });
+                    watchPip(() => {
+                        // 本地即时移除，不触发全量重扫
+                        MD.heavyItems = (MD.heavyItems || []).filter(p => !names.includes(p.name));
+                        renderHeavy(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+                            el("div", { class: "md-title", style: "color:#7fdc9a", text: `✅ 已卸载 ${names.length} 个包（约 ${fmtBytes(total)}）` }),
+                            el("div", { class: "md-meta", text: "列表已按卸载结果即时更新；如需精确的剩余占用统计，请点「🔄 重新统计」" }),
+                        ]));
+                    });
+                } catch (e) { alert("卸载失败：" + e.message); }
+            } }),
+        ]));
+        if (!items.length) {
+            heavyBox.appendChild(el("div", { class: "md-empty", text: "点击「重新统计」开始扫描" }));
+            return;
+        }
+        const tbody = el("tbody");
+        for (const p of items) {
+            const unBtn = p.core
+                ? el("span", { class: "md-pill ok", style: "opacity:.75", title: "ComfyUI 核心依赖，卸载会导致无法启动", text: "核心·禁卸" })
+                : el("button", { class: "md-btn danger", text: "卸载", onclick: async () => {
+                    if (!confirm(`确认卸载 ${p.name} ${p.version}（${p.size_str}）吗？\n\n卸载后如插件报 ImportError，重新 pip install 即可恢复。`)) return;
+                    try {
+                        await mdFetch("/md/pip_uninstall", { method: "POST", body: { packages: [p.name] } });
+                        watchPip(() => {
+                            MD.heavyItems = (MD.heavyItems || []).filter(x => x.name !== p.name);
+                            renderHeavy(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+                                el("div", { class: "md-title", style: "color:#7fdc9a", text: `✅ 已卸载 ${p.name}（${p.size_str}）` }),
+                                el("div", { class: "md-meta", text: "列表已即时更新；如需精确统计请点「🔄 重新统计」" }),
+                            ]));
+                        });
+                    } catch (e) { alert("卸载失败：" + e.message); }
+                } });
+            tbody.appendChild(el("tr", {}, [
+                el("td", { style: "width:30px" }, p.core ? null :
+                    el("input", { class: "md-check", type: "checkbox", "data-name": p.name })),
+                el("td", { text: p.name, style: "font-weight:600" }),
+                el("td", { text: p.version, style: "color:#888" }),
+                el("td", { text: p.size_str, style: "white-space:nowrap" }),
+                el("td", {}, unBtn),
+            ]));
+        }
+        heavyBox.appendChild(el("div", { class: "md-table-wrap" }, el("table", { class: "md-table" }, [
+            el("colgroup", {}, [el("col", { style: "width:34px" }), el("col", { style: "width:32%" }), el("col", { style: "width:20%" }), el("col", { style: "width:18%" }), el("col", { style: "width:auto" })]),
+            el("thead", {}, el("tr", {}, [el("th"), el("th", { text: "包名" }), el("th", { text: "版本" }), el("th", { text: "占用" }), el("th", { text: "操作" })])),
+            tbody,
+        ])));
+        heavyBox.appendChild(el("div", { class: "md-meta", style: "color:#777;font-size:11px",
+            text: "「核心·禁卸」= ComfyUI 或其 requirements 声明的依赖，卸载会导致启动失败；其余包卸载前请确认没有插件正在使用。卸载结果会即时更新列表，无需等待重新扫描。" }));
+    }
+
     function loadHeavy(force) {
         heavyBox.innerHTML = "";
-        heavyBox.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "统计 site-packages 占用（首次需几秒）..."]));
+        heavyBox.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "统计 site-packages 占用（首次需几秒到几十秒）..."]));
         mdFetch("/md/env_heavy?top=25" + (force ? "&force=1" : "")).then(d => {
-            heavyBox.innerHTML = "";
-            heavyBox.appendChild(el("div", { class: "md-row" }, [
-                el("span", { class: "md-pill info", text: `共 ${d.total_packages} 个包，展示占用 Top ${d.items.length}` }),
-                el("button", { class: "md-btn ghost", text: "🔄 重新统计", onclick: () => loadHeavy(true) }),
+            MD.heavyItems = d.items || [];
+            renderHeavy(el("div", { class: "md-row" }, [
+                el("span", { class: "md-pill info", text: `共 ${d.total_packages} 个包` }),
+                el("span", { class: "md-meta", style: "color:#777;font-size:11px", text: `统计耗时 ${d.scan_seconds}s` }),
             ]));
-            const tbody = el("tbody");
-            for (const p of d.items) {
-                const unBtn = p.core
-                    ? el("span", { class: "md-pill ok", style: "opacity:.75", title: "ComfyUI 核心依赖，卸载会导致无法启动", text: "核心·禁卸" })
-                    : el("button", { class: "md-btn danger", text: "卸载", onclick: async () => {
-                        if (!confirm(`确认卸载 ${p.name} ${p.version}（${p.size_str}）吗？\n\n卸载后如插件报 ImportError，重新 pip install 即可恢复。`)) return;
-                        try {
-                            await mdFetch("/md/pip_uninstall", { method: "POST", body: { package: p.name } });
-                            watchPip(() => loadHeavy(true));
-                        } catch (e) { alert("卸载失败：" + e.message); }
-                    } });
-                tbody.appendChild(el("tr", {}, [
-                    el("td", { text: p.name, style: "font-weight:600" }),
-                    el("td", { text: p.version, style: "color:#888" }),
-                    el("td", { text: p.size_str, style: "white-space:nowrap" }),
-                    el("td", {}, unBtn),
-                ]));
-            }
-            heavyBox.appendChild(el("div", { class: "md-table-wrap" }, el("table", { class: "md-table" }, [
-                el("colgroup", {}, [el("col", { style: "width:36%" }), el("col", { style: "width:22%" }), el("col", { style: "width:20%" }), el("col", { style: "width:auto" })]),
-                el("thead", {}, el("tr", {}, [el("th", { text: "包名" }), el("th", { text: "版本" }), el("th", { text: "占用" }), el("th", { text: "操作" })])),
-                tbody,
-            ])));
-            heavyBox.appendChild(el("div", { class: "md-meta", style: "color:#777;font-size:11px",
-                text: "「核心·禁卸」= ComfyUI 或其 requirements 声明的依赖，卸载会导致启动失败；其余包卸载前请确认没有插件正在使用。" }));
         }).catch(e => {
             heavyBox.innerHTML = "";
             heavyBox.appendChild(el("div", { class: "md-error", text: "统计失败：" + e.message }));
