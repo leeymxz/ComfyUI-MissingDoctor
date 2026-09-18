@@ -917,30 +917,62 @@ function renderEnvTab(body) {
                 return;
             }
             // 只展示缺失 + 版本不符的（齐全的折叠统计）
-            const bad = d.items.filter(i => i.missing || i.version_ok === false);
+            const bad = d.items.filter(i => i.missing || i.version_ok === false || i.kind === "url");
             if (bad.length) {
-                const missingPkgs = [...new Set(bad.filter(i => i.missing).map(i => i.name))];
-                reqBox.appendChild(el("div", { class: "md-row" }, [
-                    el("button", { class: "md-btn", text: `⬇ 一键安装缺失依赖（${missingPkgs.length} 个包）`, onclick: async () => {
-                        if (!confirm(`确认用 pip 安装以下依赖吗？\n\n${missingPkgs.join("、")}\n\n将安装到 ComfyUI 的 Python 环境。`)) return;
-                        try {
-                            await mdFetch("/md/pip_install", { method: "POST", body: { packages: missingPkgs } });
-                            watchPip(() => loadReq(true));
-                        } catch (e) { alert("安装失败：" + e.message); }
-                    } }),
-                ]));
-                const tbody = el("tbody");
-                for (const i of bad.slice(0, 100)) {
-                    tbody.appendChild(el("tr", {}, [
-                        el("td", { text: i.plugin }),
-                        el("td", { text: i.requirement }),
-                        el("td", {}, el("span", { class: "md-pill " + (i.missing ? "bad" : "info"),
-                            text: i.missing ? "❌ 未安装" : "⚠️ 版本 " + i.installed })),
+                // 一键安装：仅普通 PyPI 包（URL/git 依赖需逐个装，避免一个失败拖垮全部）
+                const missingPkgs = [...new Set(bad.filter(i => i.missing && i.kind === "pypi").map(i => i.name))];
+                if (missingPkgs.length) {
+                    reqBox.appendChild(el("div", { class: "md-row" }, [
+                        el("button", { class: "md-btn", text: `⬇ 一键安装缺失依赖（${missingPkgs.length} 个包）`, onclick: async () => {
+                            if (!confirm(`确认用 pip 安装以下依赖吗？\n\n${missingPkgs.join("、")}\n\n将安装到 ComfyUI 的 Python 环境。`)) return;
+                            try {
+                                await mdFetch("/md/pip_install", { method: "POST", body: { packages: missingPkgs } });
+                                watchPip(() => loadReq(true));
+                            } catch (e) { alert("安装失败：" + e.message); }
+                        } }),
+                        el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "git/直链类依赖在下方单独安装" }),
                     ]));
                 }
+                const tbody = el("tbody");
+                for (const i of bad.slice(0, 120)) {
+                    if (i.kind === "url") {
+                        // git+https / 直链依赖：逐个安装
+                        tbody.appendChild(el("tr", {}, [
+                            el("td", { text: i.plugin }),
+                            el("td", { class: "wrap", text: i.requirement, title: i.requirement }),
+                            el("td", {}, el("div", { style: "display:flex;gap:6px;align-items:center" }, [
+                                el("button", { class: "md-btn", text: "⬇ 单独安装", title: "URL/git 依赖单独执行 pip，失败不影响其他包", onclick: async () => {
+                                    if (!confirm(`单独安装 ${i.requirement} 吗？\n（git 依赖需要本机 git 可用，安装耗时视仓库而定）`)) return;
+                                    try {
+                                        await mdFetch("/md/pip_install", { method: "POST", body: { packages: [i.requirement] } });
+                                        watchPip(() => loadReq(true));
+                                    } catch (e) { alert("安装失败：" + e.message); }
+                                } }),
+                            ])),
+                        ]));
+                        continue;
+                    }
+                    const statusPill = i.missing
+                        ? el("span", { class: "md-pill bad", text: "❌ 未安装" })
+                        : el("span", { class: "md-pill info", text: "⚠️ 版本 " + i.installed });
+                    tbody.appendChild(el("tr", {}, [
+                        el("td", { text: i.plugin }),
+                        el("td", { class: "wrap", text: i.requirement }),
+                        el("td", {}, el("div", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap" }, [
+                            statusPill,
+                            i.hint ? el("span", { class: "md-pill info", title: i.hint, style: "cursor:help", text: "💡 有提示" }) : null,
+                        ])),
+                    ]));
+                    if (i.hint) {
+                        tbody.appendChild(el("tr", {}, [
+                            el("td"),
+                            el("td", { colspan: "2", style: "color:#ffb060;font-size:11px", text: "💡 " + i.hint }),
+                        ]));
+                    }
+                }
                 reqBox.appendChild(el("div", { class: "md-table-wrap" }, el("table", { class: "md-table" }, [
-                    el("colgroup", {}, [el("col", { style: "width:32%" }), el("col", { style: "width:38%" }), el("col", { style: "width:auto" })]),
-                    el("thead", {}, el("tr", {}, [el("th", { text: "插件" }), el("th", { text: "声明的依赖" }), el("th", { text: "状态" })])),
+                    el("colgroup", {}, [el("col", { style: "width:28%" }), el("col", { style: "width:40%" }), el("col", { style: "width:auto" })]),
+                    el("thead", {}, el("tr", {}, [el("th", { text: "插件" }), el("th", { text: "声明的依赖" }), el("th", { text: "状态 / 操作" })])),
                     tbody,
                 ])));
             } else {

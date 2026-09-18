@@ -40,8 +40,11 @@ def _validate_package(p):
     p = (p or "").strip()
     if not p or len(p) > 300:
         return None
-    # git+https 依赖（如 git+https://github.com/xxx/yyy.git）
+    # git+https 依赖
     if p.startswith("git+") and re.match(r"^git\+https://[^\s]+$", p):
+        return p
+    # 直链 wheel/tar（.whl / .tar.gz / .zip）
+    if re.match(r"^https?://[^\s]+\.(whl|tar\.gz|zip)(\?.*)?$", p):
         return p
     if not PKG_RE.match(p):
         return None

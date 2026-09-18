@@ -65,8 +65,22 @@ def parse_requirements(path):
     return reqs
 
 
+# 常见"特殊安装"包的提示（前端展示，帮助用户理解为何直接 pip 会失败）
+KNOWN_HINTS = {
+    "tensorrt": "TensorRT 需 NVIDIA 索引，建议手动: pip install tensorrt --extra-index-url https://pypi.nvidia.com",
+    "nvidia-cudnn-cu12": "CUDA 库类包体积大且跟随 torch 版本，一般随 torch 自动安装",
+    "flash-attn": "需要与 torch/CUDA 匹配的预编译轮子，建议从发布页下载对应 whl",
+}
+
+
 def split_requirement(req):
-    """把 'pkg>=1.2' 拆成 (名称, 版本说明符或空)"""
+    """把 'pkg>=1.2' 拆成 (名称, 版本说明符或空)。
+
+    git+https / 直链 whl 等 URL 依赖返回 (None, "")——由调用方按 kind=url 处理。
+    """
+    req = (req or "").strip()
+    if req.startswith(("git+", "http://", "https://")):
+        return None, ""
     m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._\-]*)\s*(.*)$", req)
     if not m:
         return None, ""
@@ -277,6 +291,23 @@ def scan_requirements(force=False):
                     req_part, marker = line, ""
                 if not marker_applies(marker):
                     continue  # 不适用于当前平台的条件依赖（如 aarch64 专用）跳过
+
+                # git+https / 直链 whl 等 URL 依赖：无法离线判断安装状态，
+                # 标记 kind=url 单独列出，由用户逐个安装
+                if req_part.startswith(("git+", "http://", "https://")):
+                    items.append({
+                        "plugin": plugin,
+                        "requirement": req_part,
+                        "name": req_part,
+                        "installed": None,
+                        "missing": False,
+                        "version_ok": None,
+                        "kind": "url",
+                        "core": False,
+                        "hint": "",
+                    })
+                    continue
+
                 name, spec = split_requirement(req_part)
                 if not name:
                     continue
@@ -295,7 +326,9 @@ def scan_requirements(force=False):
                     "installed": installed,
                     "missing": installed is None,
                     "version_ok": ok,
+                    "kind": "pypi",
                     "core": _canon(name) in core_packages(),
+                    "hint": KNOWN_HINTS.get(_canon(name), ""),
                 })
 
     data = {"items": items,
