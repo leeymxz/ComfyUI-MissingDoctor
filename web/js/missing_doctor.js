@@ -161,6 +161,7 @@ function buildDialog() {
             ["models", "📦 缺失模型"],
             ["aged", "🕰 老旧模型"],
             ["cleanup", "🧹 清理"],
+            ["env", "🧪 环境"],
         ].map(([id, label]) =>
             el("div", { class: "md-tab", "data-tab": id, text: label,
                         onclick: () => switchTab(id) })));
@@ -243,6 +244,7 @@ function switchTab(id) {
     else if (id === "models") renderModelsTab(body);
     else if (id === "aged") renderAgedTab(body);
     else if (id === "cleanup") renderCleanupTab(body);
+    else if (id === "env") renderEnvTab(body);
 }
 
 function openDialog() {
@@ -813,6 +815,205 @@ function renderAgedTab(body) {
         scanBtn,
     ]));
     body.appendChild(resultBox);
+}
+
+// ---------------------------------------------------------------- Tab5: 环境
+
+function renderEnvTab(body) {
+    const envBox = el("div");
+    const reqBox = el("div");
+    const heavyBox = el("div");
+    const pipBox = el("div");
+
+    // ---------- pip 状态轮询 ----------
+    let pipTimer = null;
+    function watchPip(onDone) {
+        if (pipTimer) clearInterval(pipTimer);
+        pipTimer = setInterval(async () => {
+            let s;
+            try { s = await mdFetch("/md/pip_status"); } catch (e) { return; }
+            pipBox.innerHTML = "";
+            if (s.running) {
+                pipBox.appendChild(el("div", { class: "md-empty" }, [
+                    el("span", { class: "md-spin" }),
+                    el("span", { text: "pip 执行中: " + s.cmd }),
+                ]));
+                if (s.output_tail && s.output_tail.length) {
+                    pipBox.appendChild(el("div", { class: "md-card", style: "font-family:monospace;font-size:11px;color:#9cdc9c;max-height:140px;overflow-y:auto" },
+                        el("div", { text: s.output_tail.slice(-12).join("\n") })));
+                }
+            } else if (s.done) {
+                clearInterval(pipTimer);
+                pipBox.innerHTML = "";
+                pipBox.appendChild(el("div", { class: s.error ? "md-error" : "md-card", style: s.error ? "" : "border-color:#2f5c3a" }, [
+                    el("div", { class: "md-title", style: s.error ? "color:#ff9c9c" : "color:#7fdc9a",
+                        text: s.error ? "❌ pip 失败: " + s.error : "✅ pip 执行成功" }),
+                    el("div", { style: "font-family:monospace;font-size:11px;color:#aaa;max-height:140px;overflow-y:auto;white-space:pre-wrap",
+                        text: (s.output_tail || []).slice(-14).join("\n") }),
+                ]));
+                if (onDone) onDone();
+            }
+        }, 1200);
+    }
+
+    // ---------- 环境总览 ----------
+    function loadEnv() {
+        envBox.innerHTML = "";
+        envBox.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "读取环境信息..."]));
+        mdFetch("/md/env_summary").then(d => {
+            envBox.innerHTML = "";
+            const row = (k, v, extra) => el("div", { style: "display:flex;gap:8px;font-size:12px;margin-bottom:5px" }, [
+                el("span", { style: "color:#888;min-width:96px", text: k }),
+                el("span", { style: "color:#ddd;word-break:break-all", text: String(v) }),
+                extra || null,
+            ]);
+            envBox.appendChild(el("div", { class: "md-card" }, [
+                el("div", { class: "md-title", text: "🖥 运行环境" }),
+                row("Python", d.python),
+                row("ComfyUI", d.comfyui),
+                row("PyTorch", d.torch),
+                d.cuda_available ? row("CUDA", d.cuda) : null,
+                d.gpu ? row("GPU", d.gpu, d.vram_total_gb ? el("span", { class: "md-pill info", text: d.vram_total_gb + " GB" }) : null) : null,
+                d.mem_total_gb ? row("内存", `${d.mem_avail_gb} GB 可用 / ${d.mem_total_gb} GB（负载 ${d.mem_load}%）`) : null,
+                row("已装包数量", d.package_count || "-"),
+                el("div", { style: "font-size:12px;margin-top:6px" }, [
+                    el("span", { style: "color:#888", text: "Python 路径: " }),
+                    el("span", { style: "color:#8ab4ff;font-family:monospace;font-size:11px", text: d.python_path }),
+                ]),
+            ]));
+            const diskCard = el("div", { class: "md-card" }, [el("div", { class: "md-title", text: "💾 磁盘空间（模型所在盘）" })]);
+            for (const [drive, info] of Object.entries(d.disks || {})) {
+                const pct = Math.round((1 - info.free_gb / info.total_gb) * 100);
+                diskCard.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:12px" }, [
+                    el("span", { style: "min-width:70px;font-weight:600", text: drive }),
+                    el("div", { class: "md-progress", style: "flex:1" }, [
+                        el("div", { style: `width:${pct}%;background:${pct > 90 ? "#8f3a3a" : "#4a6fa5"}` }),
+                        el("span", { class: "md-progress-text", text: `${info.free_gb} GB 可用 / ${info.total_gb} GB` }),
+                    ]),
+                ]));
+            }
+            envBox.appendChild(diskCard);
+        }).catch(e => {
+            envBox.innerHTML = "";
+            envBox.appendChild(el("div", { class: "md-error", text: "环境读取失败：" + e.message }));
+        });
+    }
+
+    // ---------- 依赖体检 ----------
+    function loadReq(force) {
+        reqBox.innerHTML = "";
+        reqBox.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "扫描插件 requirements.txt..."]));
+        mdFetch("/md/env_requirements" + (force ? "?force=1" : "")).then(d => {
+            reqBox.innerHTML = "";
+            reqBox.appendChild(el("div", { class: "md-row" }, [
+                el("span", { class: "md-pill info", text: `扫描了 ${d.plugin_count} 个插件的依赖声明` }),
+                d.missing_count > 0
+                    ? el("span", { class: "md-pill bad", text: `缺失 ${d.missing_count}` })
+                    : el("span", { class: "md-pill ok", text: "依赖齐全 ✓" }),
+                d.warn_count > 0 ? el("span", { class: "md-pill info", text: `版本差异 ${d.warn_count}` }) : null,
+            ]));
+            if (!d.items || !d.items.length) {
+                reqBox.appendChild(el("div", { class: "md-empty", text: "插件目录里没有带 requirements.txt 的插件" }));
+                return;
+            }
+            // 只展示缺失 + 版本不符的（齐全的折叠统计）
+            const bad = d.items.filter(i => i.missing || i.version_ok === false);
+            if (bad.length) {
+                const missingPkgs = [...new Set(bad.filter(i => i.missing).map(i => i.name))];
+                reqBox.appendChild(el("div", { class: "md-row" }, [
+                    el("button", { class: "md-btn", text: `⬇ 一键安装缺失依赖（${missingPkgs.length} 个包）`, onclick: async () => {
+                        if (!confirm(`确认用 pip 安装以下依赖吗？\n\n${missingPkgs.join("、")}\n\n将安装到 ComfyUI 的 Python 环境。`)) return;
+                        try {
+                            await mdFetch("/md/pip_install", { method: "POST", body: { packages: missingPkgs } });
+                            watchPip(() => loadReq(true));
+                        } catch (e) { alert("安装失败：" + e.message); }
+                    } }),
+                ]));
+                const tbody = el("tbody");
+                for (const i of bad.slice(0, 100)) {
+                    tbody.appendChild(el("tr", {}, [
+                        el("td", { text: i.plugin }),
+                        el("td", { text: i.requirement }),
+                        el("td", {}, el("span", { class: "md-pill " + (i.missing ? "bad" : "info"),
+                            text: i.missing ? "❌ 未安装" : "⚠️ 版本 " + i.installed })),
+                    ]));
+                }
+                reqBox.appendChild(el("div", { class: "md-table-wrap" }, el("table", { class: "md-table" }, [
+                    el("colgroup", {}, [el("col", { style: "width:32%" }), el("col", { style: "width:38%" }), el("col", { style: "width:auto" })]),
+                    el("thead", {}, el("tr", {}, [el("th", { text: "插件" }), el("th", { text: "声明的依赖" }), el("th", { text: "状态" })])),
+                    tbody,
+                ])));
+            } else {
+                reqBox.appendChild(el("div", { class: "md-empty", text: "所有插件依赖均已安装 🎉" }));
+            }
+        }).catch(e => {
+            reqBox.innerHTML = "";
+            reqBox.appendChild(el("div", { class: "md-error", text: "扫描失败：" + e.message }));
+        });
+    }
+
+    // ---------- 重量级包 ----------
+    function loadHeavy(force) {
+        heavyBox.innerHTML = "";
+        heavyBox.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "统计 site-packages 占用（首次需几秒）..."]));
+        mdFetch("/md/env_heavy?top=25" + (force ? "&force=1" : "")).then(d => {
+            heavyBox.innerHTML = "";
+            heavyBox.appendChild(el("div", { class: "md-row" }, [
+                el("span", { class: "md-pill info", text: `共 ${d.total_packages} 个包，展示占用 Top ${d.items.length}` }),
+                el("button", { class: "md-btn ghost", text: "🔄 重新统计", onclick: () => loadHeavy(true) }),
+            ]));
+            const tbody = el("tbody");
+            for (const p of d.items) {
+                const unBtn = p.core
+                    ? el("span", { class: "md-pill ok", style: "opacity:.75", title: "ComfyUI 核心依赖，卸载会导致无法启动", text: "核心·禁卸" })
+                    : el("button", { class: "md-btn danger", text: "卸载", onclick: async () => {
+                        if (!confirm(`确认卸载 ${p.name} ${p.version}（${p.size_str}）吗？\n\n卸载后如插件报 ImportError，重新 pip install 即可恢复。`)) return;
+                        try {
+                            await mdFetch("/md/pip_uninstall", { method: "POST", body: { package: p.name } });
+                            watchPip(() => loadHeavy(true));
+                        } catch (e) { alert("卸载失败：" + e.message); }
+                    } });
+                tbody.appendChild(el("tr", {}, [
+                    el("td", { text: p.name, style: "font-weight:600" }),
+                    el("td", { text: p.version, style: "color:#888" }),
+                    el("td", { text: p.size_str, style: "white-space:nowrap" }),
+                    el("td", {}, unBtn),
+                ]));
+            }
+            heavyBox.appendChild(el("div", { class: "md-table-wrap" }, el("table", { class: "md-table" }, [
+                el("colgroup", {}, [el("col", { style: "width:36%" }), el("col", { style: "width:22%" }), el("col", { style: "width:20%" }), el("col", { style: "width:auto" })]),
+                el("thead", {}, el("tr", {}, [el("th", { text: "包名" }), el("th", { text: "版本" }), el("th", { text: "占用" }), el("th", { text: "操作" })])),
+                tbody,
+            ])));
+            heavyBox.appendChild(el("div", { class: "md-meta", style: "color:#777;font-size:11px",
+                text: "「核心·禁卸」= ComfyUI 或其 requirements 声明的依赖，卸载会导致启动失败；其余包卸载前请确认没有插件正在使用。" }));
+        }).catch(e => {
+            heavyBox.innerHTML = "";
+            heavyBox.appendChild(el("div", { class: "md-error", text: "统计失败：" + e.message }));
+        });
+    }
+
+    body.appendChild(envBox);
+    loadEnv();
+
+    body.appendChild(el("div", { class: "md-card" }, [
+        el("div", { class: "md-row", style: "margin-bottom:6px" }, [
+            el("div", { class: "md-title", text: "🧩 插件依赖体检" }),
+            el("button", { class: "md-btn ghost", text: "扫描", onclick: () => loadReq(true) }),
+        ]),
+        el("div", { class: "md-meta", text: "检查每个插件的 requirements.txt 声明是否已安装——装完插件不工作多半是缺依赖" }),
+    ]));
+    body.appendChild(reqBox);
+
+    body.appendChild(el("div", { class: "md-card" }, [
+        el("div", { class: "md-row", style: "margin-bottom:6px" }, [
+            el("div", { class: "md-title", text: "🐘 重量级包管理" }),
+            el("button", { class: "md-btn ghost", text: "统计占用", onclick: () => loadHeavy(true) }),
+        ]),
+        el("div", { class: "md-meta", text: "按磁盘占用排序，找出像 wandb / tensorboard 这类装了没用的大包，核心依赖自动禁卸" }),
+    ]));
+    body.appendChild(heavyBox);
+    body.appendChild(pipBox);
 }
 
 // ---------------------------------------------------------------- Tab4: 清理

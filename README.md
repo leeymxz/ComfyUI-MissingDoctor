@@ -13,6 +13,7 @@ ComfyUI 体检中心：**缺失节点/模型检测 + 一键自动安装 + 模型
 | 🕰 老旧模型检索 | 按"最后修改时间"扫描超过 N 天（默认 90，可调）未变动的模型 |
 | 🛡 调用记录防误删 | 自动记录每个模型的真实加载时间（挂钩 folder_paths.get_full_path），近期仍在使用的模型标红警告，批量删除自动跳过 |
 | 🧹 安全清理 | temp / output（支持保留最近 N 天）/ `__pycache__` / 历史日志，先预览再清理，删除进回收站 |
+| 🧪 环境管理 | Python/torch/CUDA/GPU/内存/磁盘总览；扫描全部插件 requirements.txt 找缺失依赖并一键 pip 安装；site-packages 占用排行（自动识别核心依赖禁卸） |
 | 🖱 体验细节 | 面板可拖动并记忆位置、打开自动检测、标签页与天数偏好记忆、四重关闭方式（✕/Esc/点空白/自动） |
 
 ## 安装
@@ -54,6 +55,12 @@ pip install -r ComfyUI-MissingDoctor/requirements.txt
 | POST | `/md/install_start` | body: `{"items": [{"url", "title"}]}`，批量 git clone 安装节点 |
 | GET | `/md/install_status` | 安装进度查询 |
 | GET | `/md/model_folders` | 可用模型目录列表 |
+| GET | `/md/env_summary` | Python/torch/CUDA/GPU/内存/磁盘 环境总览 |
+| GET | `/md/env_requirements` | 插件依赖体检（自动跳过不适用平台的条件依赖） |
+| GET | `/md/env_heavy?top=25` | site-packages 占用排行（核心包自动标记） |
+| POST | `/md/pip_install` | body: `{"packages": [...]}`，批量安装 |
+| POST | `/md/pip_uninstall` | body: `{"package": "..."}`，卸载（核心包拒绝） |
+| GET | `/md/pip_status` | pip 任务状态与输出 |
 
 ## 安全设计
 
@@ -75,6 +82,8 @@ ComfyUI-MissingDoctor/
 ├── usage_tracker.py     # 模型调用时间记录（挂钩 get_full_path）
 ├── downloader.py        # 模型下载器（进度/断点保护/白名单）
 ├── installer.py         # 缺失节点安装器（git clone 队列）
+├── envinfo.py           # 环境总览 / 依赖体检 / 重量级包扫描
+├── pkgmgr.py            # pip 安装/卸载后台执行
 ├── cleaner.py           # 安全清理（白名单 + 回收站）
 ├── requirements.txt
 └── web/js/missing_doctor.js   # 前端面板

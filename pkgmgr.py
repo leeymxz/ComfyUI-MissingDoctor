@@ -1,0 +1,112 @@
+# -*- coding: utf-8 -*-
+"""
+ComfyUI-MissingDoctor - pip 安装/卸载后台执行
+
+- 使用 ComfyUI 自身的 Python（sys.executable -m pip），装对地方
+- 后台线程执行，流式捕获输出（保留尾部 40 行供前端展示）
+- 包名格式校验；卸载前由调用方（API 层）校验核心包黑名单
+"""
+
+import os
+import re
+import subprocess
+import sys
+import threading
+
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+_lock = threading.Lock()
+_state = {
+    "running": False,
+    "done": False,
+    "error": None,
+    "exitcode": None,
+    "cmd": None,
+    "output_tail": [],
+}
+_thread = None
+
+PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]*(\s*[=<>!~]=?\s*[A-Za-z0-9._\-]+)*$")
+
+
+def status():
+    with _lock:
+        s = dict(_state)
+        s["output_tail"] = list(_state["output_tail"])
+    return s
+
+
+def _validate_package(p):
+    p = (p or "").strip()
+    if not p or len(p) > 300:
+        return None
+    # git+https 依赖（如 git+https://github.com/xxx/yyy.git）
+    if p.startswith("git+") and re.match(r"^git\+https://[^\s]+$", p):
+        return p
+    if not PKG_RE.match(p):
+        return None
+    return p
+
+
+def install_packages(packages):
+    """pip install 多个包。返回 {ok, cmd} 或 {error}"""
+    pkgs = []
+    for p in packages or []:
+        v = _validate_package(p)
+        if not v:
+            return {"error": "非法的包名: %r" % (p,)}
+        pkgs.append(v)
+    if not pkgs:
+        return {"error": "未指定要安装的包"}
+    return _run(["install", "--disable-pip-version-check", "--no-input"] + pkgs)
+
+
+def uninstall_package(name):
+    """pip uninstall 单个包"""
+    v = _validate_package(name)
+    if not v:
+        return {"error": "非法的包名: %r" % (name,)}
+    return _run(["uninstall", "-y", "--disable-pip-version-check", v])
+
+
+def _run(args):
+    global _thread
+    with _lock:
+        if _state["running"]:
+            return {"error": "pip 任务进行中，请等待完成"}
+        _state.update({
+            "running": True, "done": False, "error": None, "exitcode": None,
+            "cmd": "python -m pip " + " ".join(args), "output_tail": [],
+        })
+
+    def worker():
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "pip"] + args,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=CREATE_NO_WINDOW,
+            )
+            tail = []
+            for line in proc.stdout or []:
+                line = line.rstrip()
+                if line:
+                    tail.append(line)
+                    if len(tail) > 60:
+                        tail = tail[-60:]
+                    with _lock:
+                        _state["output_tail"] = tail[-40:]
+            code = proc.wait()
+            with _lock:
+                _state["running"] = False
+                _state["done"] = True
+                _state["exitcode"] = code
+                if code != 0:
+                    _state["error"] = "pip 退出码 %d（详见输出）" % code
+        except Exception as e:
+            with _lock:
+                _state.update(running=False, done=True, error=str(e)[:300])
+
+    _thread = threading.Thread(target=worker, daemon=True, name="MissingDoctor-Pip")
+    _thread.start()
+    return {"ok": True, "cmd": _state["cmd"]}

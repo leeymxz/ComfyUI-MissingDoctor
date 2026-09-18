@@ -21,7 +21,9 @@ from . import checker
 from . import aged as aged_mod
 from . import cleaner
 from . import downloader
+from . import envinfo
 from . import installer
+from . import pkgmgr
 from . import remote_lookup
 
 
@@ -245,6 +247,73 @@ async def h_install_status(request):
         return _err(e)
 
 
+async def h_env_summary(request):
+    try:
+        return _json({"status": "ok", "data": envinfo.env_summary()})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_env_requirements(request):
+    try:
+        force = request.query.get("force", "0") == "1"
+        return _json({"status": "ok", "data": envinfo.scan_requirements(force=force)})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_env_heavy(request):
+    try:
+        try:
+            top = int(request.query.get("top", 25))
+        except (TypeError, ValueError):
+            top = 25
+        force = request.query.get("force", "0") == "1"
+        return _json({"status": "ok", "data": envinfo.heavy_packages(top=top, force=force)})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_pip_install(request):
+    try:
+        body = await _body(request)
+        result = pkgmgr.install_packages(body.get("packages") or [])
+        if "error" in result:
+            return _err(result["error"], 400)
+        return _json({"status": "ok", "data": result})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_pip_uninstall(request):
+    try:
+        body = await _body(request)
+        name = body.get("package") or ""
+        # 核心包保护：卸了 ComfyUI 会崩的包直接拒绝
+        cores = envinfo.core_packages()
+        name_only = (envinfo.split_requirement(name)[0] or name)
+        if envinfo._canon(name_only) in cores:
+            return _err("「%s」是 ComfyUI 核心依赖，禁止卸载" % name_only, 403)
+        result = pkgmgr.uninstall_package(name_only)
+        if "error" in result:
+            return _err(result["error"], 400)
+        return _json({"status": "ok", "data": result})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_pip_status(request):
+    try:
+        return _json({"status": "ok", "data": pkgmgr.status()})
+    except Exception as e:
+        return _err(e)
+
+
 # ---------------------------------------------------------------- 注册
 
 ROUTES = [
@@ -260,6 +329,12 @@ ROUTES = [
     ("GET", "/md/model_folders", h_model_folders),
     ("POST", "/md/install_start", h_install_start),
     ("GET", "/md/install_status", h_install_status),
+    ("GET", "/md/env_summary", h_env_summary),
+    ("GET", "/md/env_requirements", h_env_requirements),
+    ("GET", "/md/env_heavy", h_env_heavy),
+    ("POST", "/md/pip_install", h_pip_install),
+    ("POST", "/md/pip_uninstall", h_pip_uninstall),
+    ("GET", "/md/pip_status", h_pip_status),
 ]
 
 
