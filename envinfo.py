@@ -69,7 +69,9 @@ def parse_requirements(path):
 KNOWN_HINTS = {
     "tensorrt": "TensorRT 需 NVIDIA 索引，建议手动: pip install tensorrt --extra-index-url https://pypi.nvidia.com",
     "nvidia-cudnn-cu12": "CUDA 库类包体积大且跟随 torch 版本，一般随 torch 自动安装",
-    "flash-attn": "需要与 torch/CUDA 匹配的预编译轮子，建议从发布页下载对应 whl",
+    "flash-attn": "⚠️ 多个插件引用（FlashVSR/Qwen-TTS/KJNodes/SAM3DBody 等），不建议卸载",
+    "taichi": "ComfyUI-Frame-Interpolation 的 RIFE/FILM 插帧后端在用，不建议卸载",
+    "cupy": "ComfyUI-Frame-Interpolation 在用，不建议卸载",
 }
 
 

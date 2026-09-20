@@ -228,19 +228,43 @@ def search_github_repos(query, limit=3):
         return []
 
 
+def _camel_words(s):
+    """CamelCase 拆词：ApplyInstantID -> [Apply, Instant, ID]"""
+    return re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+", s)
+
+
 def suggest_node_sources(class_type):
-    """缺失节点的安装来源建议"""
+    """缺失节点的安装来源建议。
+
+    1. Manager 数据库精确/模式匹配
+    2. GitHub 搜索兜底：整名 → CamelCase 两词组合 → 最长单词，逐级放宽
+    """
     results = []
     for r in find_repo_for_node(class_type):
         results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
     if not results:
-        for g in search_github_repos("ComfyUI " + class_type):
-            results.append({
-                "repo": g["repo"],
-                "title": g.get("title") or "",
-                "match": "github-search",
-            })
-    return results
+        queries = ["ComfyUI " + class_type]
+        words = _camel_words(class_type)
+        cands = []
+        for i in range(len(words) - 1):
+            combo = words[i] + words[i + 1]
+            cands.append(combo)
+        for c in sorted(set(cands), key=len, reverse=True)[:2]:
+            q = "ComfyUI " + c
+            if q not in queries:
+                queries.append(q)
+        if words:
+            longest = max(words, key=len)
+            q = "ComfyUI " + longest
+            if q not in queries:
+                queries.append(q)
+        for q in queries:
+            hits = search_github_repos(q)
+            if hits:
+                for g in hits:
+                    results.append({"repo": g["repo"], "title": g["title"], "match": "github-search"})
+                break
+    return results[:6]
 
 
 # ---------------------------------------------------------------- 模型查询

@@ -17,6 +17,12 @@ MODEL_EXTS = {
     ".onnx", ".sft", ".engine", ".trt", ".pt2",
 }
 
+# 前端 UI 专属节点（不属于后端执行流，不应参与缺失检测）
+UI_ONLY_NODES = {
+    "Note", "MarkdownNote", "Reroute", "PrimitiveNode",
+    "PrimitiveString", "PrimitiveStringMultiline", "ComfyUINoteNode",
+}
+
 # 常见输入名 -> 可能的模型目录
 # 一个输入名有多个候选目录，是因为新旧版本 ComfyUI 目录名不同
 # （例如 clip -> text_encoders，unet -> diffusion_models）
@@ -80,6 +86,9 @@ def extract_from_prompt(prompt):
         if not isinstance(node, dict):
             continue
         ct = node.get("class_type")
+        # 过滤前端 UI 节点（Note/便签等不参与后端执行，不应报缺失）
+        if ct and str(ct) in UI_ONLY_NODES:
+            continue
         if ct:
             class_types.append(str(ct))
 
@@ -117,6 +126,8 @@ def extract_from_ui(ui_workflow):
         if not isinstance(node, dict):
             continue
         ct = node.get("type")
+        if ct and str(ct) in UI_ONLY_NODES:
+            continue
         if ct:
             class_types.append(str(ct))
 

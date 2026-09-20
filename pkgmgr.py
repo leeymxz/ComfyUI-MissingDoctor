@@ -119,8 +119,13 @@ def _run(args):
                 if code != 0:
                     _state["error"] = "pip 退出码 %d（详见输出）" % code
         except Exception as e:
+            msg = str(e)
+            # Windows 上已加载的 .pyd/DLL 无法删除，给出可执行的建议
+            if "WinError 5" in msg or "拒绝访问" in msg or "PermissionError" in msg:
+                msg = ("文件被 ComfyUI 进程占用（该包正在使用中，Windows 不允许删除已加载的模块）。"
+                       "解决办法：重启 ComfyUI 后重试，或关闭 ComfyUI 后手动执行 pip uninstall")
             with _lock:
-                _state.update(running=False, done=True, error=str(e)[:300])
+                _state.update(running=False, done=True, error=msg[:400])
 
     _thread = threading.Thread(target=worker, daemon=True, name="MissingDoctor-Pip")
     _thread.start()

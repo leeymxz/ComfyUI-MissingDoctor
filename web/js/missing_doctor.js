@@ -16,7 +16,53 @@ const MD = {
     cleanupPreview: null,
     outputDays: 0,
     heavyItems: null,
+    wfSig: null,        // 检测时的工作流签名
+    wfSigTimer: null,   // 签名比对轮询
+    staleBarShown: false,
 };
+
+// 计算当前画布工作流签名（节点类型计数哈希），用于判断检测结果是否过期
+async function workflowSignature() {
+    try {
+        const gp = await Promise.resolve(app.graphToPrompt());
+        const out = gp.output || {};
+        const counts = {};
+        for (const k of Object.keys(out)) {
+            const ct = (out[k] || {}).class_type || "?";
+            counts[ct] = (counts[ct] || 0) + 1;
+        }
+        const keys = Object.keys(counts).sort();
+        const sig = keys.map(k => k + "x" + counts[k]).join("|");
+        return { sig, count: keys.length };
+    } catch (e) {
+        return { sig: "", count: 0 };
+    }
+}
+
+// 面板打开期间轮询：画布变化 → 显示过期提示条
+function startStaleWatch() {
+    if (MD.wfSigTimer) clearInterval(MD.wfSigTimer);
+    MD.wfSigTimer = setInterval(async () => {
+        if (!MD.overlay || MD.overlay.style.display === "none") return;
+        const cur = await workflowSignature();
+        if (MD.wfSig && cur.sig && cur.sig !== MD.wfSig && !MD.staleBarShown) {
+            MD.staleBarShown = true;
+            const bar = el("div", { id: "md-stale-bar", style:
+                "background:#4a3a10;color:#ffd54a;border-bottom:1px solid #6e5a20;padding:8px 18px;font-size:12px;display:flex;align-items:center;gap:10px" }, [
+                el("span", { text: "⚠️ 画布工作流已变化，下方检测结果可能已过期" }),
+                el("button", { class: "md-btn", text: "重新检测", onclick: () => {
+                    MD.staleBarShown = false;
+                    document.getElementById("md-stale-bar")?.remove();
+                    switchTab(MD.currentTab);
+                    const rb = [...document.querySelectorAll("#md-body button")].find(b => b.textContent.includes("检测当前工作流"));
+                    if (rb) rb.click();
+                } }),
+            ]);
+            const tabs = document.getElementById("md-tabs");
+            tabs.parentNode.insertBefore(bar, tabs);
+        }
+    }, 2000);
+}
 
 // ---------------------------------------------------------------- 工具函数
 
@@ -280,6 +326,11 @@ function openDialog() {
         const btn = document.querySelector("#md-body button");
         if (btn && btn.textContent.includes("检测当前工作流")) btn.click();
     }
+    // 清除旧的过期提示 + 启动画布变化监测
+    MD.staleBarShown = false;
+    document.getElementById("md-stale-bar")?.remove();
+    workflowSignature().then(s => { MD.wfSig = s.sig; });
+    startStaleWatch();
 }
 
 function closeDialog() {
@@ -354,6 +405,9 @@ function renderNodesTab(body) {
             [el("span", { class: "md-spin" }), "正在对比工作流与已安装节点..."]));
         runBtn.disabled = true;
         try {
+            const sig = await workflowSignature();
+            MD.wfSig = sig.sig;
+            MD.detectMeta = { time: new Date().toLocaleTimeString("zh-CN", { hour12: false }), count: sig.count };
             const gp = await Promise.resolve(app.graphToPrompt());
             const data = await mdFetch("/md/check_nodes", {
                 method: "POST", body: { workflow: { prompt: gp.output, ui: gp.workflow } } });
@@ -376,6 +430,17 @@ function renderNodesTab(body) {
                 : el("span", { class: "md-pill ok", text: "无缺失节点 ✓" }),
         ]);
         resultBox.appendChild(summary);
+
+        // 检测元信息：时间 + 画布节点数 + 可展开的使用节点清单（确认是当前流）
+        if (MD.detectMeta) {
+            const listOpen = el("details", { style: "margin:4px 0 8px" }, [
+                el("summary", { style: "cursor:pointer;font-size:11px;color:#888",
+                    text: `检测于 ${MD.detectMeta.time} · 基于当前画布 ${MD.detectMeta.count} 种节点（点击展开清单核对）` }),
+                el("div", { style: "font-family:monospace;font-size:11px;color:#8ab4ff;margin-top:4px;word-break:break-all",
+                    text: (data.used_nodes || []).join("、") }),
+            ]);
+            resultBox.appendChild(listOpen);
+        }
 
         if (!data.missing_nodes || data.missing_nodes.length === 0) {
             resultBox.appendChild(el("div", { class: "md-empty", text: "当前工作流的所有节点均已安装，无需处理 🎉" }));
@@ -554,6 +619,9 @@ function renderModelsTab(body) {
             [el("span", { class: "md-spin" }), "正在检查工作流引用的模型文件..."]));
         runBtn.disabled = true;
         try {
+            const sig = await workflowSignature();
+            MD.wfSig = sig.sig;
+            MD.detectMetaModels = { time: new Date().toLocaleTimeString("zh-CN", { hour12: false }), count: sig.count };
             const gp = await Promise.resolve(app.graphToPrompt());
             const data = await mdFetch("/md/check_models", {
                 method: "POST", body: { workflow: { prompt: gp.output, ui: gp.workflow } } });
@@ -575,6 +643,12 @@ function renderModelsTab(body) {
                 ? el("span", { class: "md-pill bad", text: `缺失 ${data.missing_count}` })
                 : el("span", { class: "md-pill ok", text: "模型齐全 ✓" }),
         ]));
+        if (MD.detectMetaModels) {
+            resultBox.appendChild(el("details", { style: "margin:4px 0 8px" }, [
+                el("summary", { style: "cursor:pointer;font-size:11px;color:#888",
+                    text: `检测于 ${MD.detectMetaModels.time} · 基于当前画布 ${MD.detectMetaModels.count} 种节点` }),
+            ]));
+        }
 
         if (!data.missing_models || data.missing_models.length === 0) {
             resultBox.appendChild(el("div", { class: "md-empty", text: "工作流引用的模型文件全部就位，无需处理 🎉" }));
