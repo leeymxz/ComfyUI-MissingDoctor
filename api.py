@@ -197,7 +197,8 @@ async def h_download_start(request):
         url = body.get("url") or ""
         folder_type = body.get("folder_type") or "checkpoints"
         filename = body.get("filename")
-        result = downloader.start_download(url, folder_type, filename)
+        dest_dir = body.get("dest_dir")
+        result = downloader.start_download(url, folder_type, filename, dest_dir)
         if "error" in result:
             return _err(result["error"], 400)
         return _json({"status": "ok", "data": result})

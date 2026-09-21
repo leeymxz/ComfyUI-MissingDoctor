@@ -521,8 +521,69 @@ async function getFolders() {
         try {
             MD_FOLDERS = (await mdFetch("/md/model_folders")).folders || [];
         } catch (e) {
-            MD_FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "diffusion_models", "upscale_models"];
+            MD_FOLDERS = [
+                { name: "checkpoints", paths: [""] }, { name: "loras", paths: [""] },
+                { name: "vae", paths: [""] }, { name: "controlnet", paths: [""] },
+                { name: "diffusion_models", paths: [""] }, { name: "upscale_models", paths: [""] },
+            ];
         }
+    }
+    return MD_FOLDERS;
+}
+
+async function startModelDownload(url, filename, defaultFolder, hintEl) {
+    const folders = await getFolders();
+    // 构建选项列表（目录名 + 实际绝对路径）
+    const options = [];
+    folders.forEach(f => {
+        f.paths.forEach((p, pi) => {
+            options.push({ name: f.name, path: p, label: `${f.name} — ${p || "(默认路径)"}`,
+                           isDefault: defaultFolder && f.name === defaultFolder && pi === 0 });
+        });
+    });
+    const defIdx = Math.max(0, options.findIndex(o => o.isDefault));
+    const listText = options.map((o, i) => `${i + 1}) ${o.label}`).join("\n");
+    const input = prompt("选择下载目标目录（输入序号）：\n" + listText, String(defIdx + 1));
+    if (input === null) return;
+    const pick = options[parseInt(input, 10) - 1];
+    if (!pick) { alert("序号无效"); return; }
+    if (!pick.path) { alert("该目录无有效路径"); return; }
+
+    const start = await mdFetch("/md/download_start", {
+        method: "POST", body: { url, filename, folder_type: pick.name, dest_dir: pick.path } });
+    if (!start.ok) { alert("下载启动失败：" + (start.error || "未知错误")); return; }
+
+    // 轮询进度
+    const timer = setInterval(async () => {
+        let s;
+        try { s = await mdFetch("/md/download_status"); } catch (e) { return; }
+        if (hintEl) {
+            if (s.running) {
+                hintEl.innerHTML = "";
+                const bar = el("div", { class: "md-progress" }, [
+                    el("div", { style: `width:${s.percent}%` }),
+                    el("span", { class: "md-progress-text",
+                        text: `⬇ ${s.filename} ${fmtBytes(s.downloaded)} / ${fmtBytes(s.total)} · ${fmtBytes(s.speed)}/s · ${s.percent}%` }),
+                ]);
+                hintEl.appendChild(bar);
+            } else if (s.done) {
+                clearInterval(timer);
+                hintEl.innerHTML = "";
+                if (s.error) {
+                    hintEl.appendChild(el("div", { class: "md-error", text: "下载失败：" + s.error }));
+                } else {
+                    hintEl.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+                        el("div", { class: "md-title", style: "color:#7fdc9a", text: "✅ 下载完成: " + s.filename }),
+                        el("div", { class: "md-meta", style: "color:#8ab4ff;word-break:break-all",
+                            text: "已保存到: " + s.target }),
+                        el("div", { class: "md-meta", text: "重新打开工作流即可使用" }),
+                    ]));
+                }
+            }
+        }
+        if (!s.running && s.done) clearInterval(timer);
+    }, 1000);
+}
     }
     return MD_FOLDERS;
 }

@@ -54,17 +54,40 @@ def status():
 
 
 def list_model_folders():
-    """所有可用的模型目录名（供前端选择下载位置）"""
+    """所有可用的模型目录：[{name, paths:[绝对路径...]}]（供前端精确选择下载位置）"""
+    result = []
     try:
-        names = [n for n in folder_paths.folder_names_and_paths.keys()
-                 if n not in ("temp", "output")]
-        return sorted(names)
+        for name, entry in folder_paths.folder_names_and_paths.items():
+            if name in ("temp", "output"):
+                continue
+            paths = [os.path.abspath(p) for p in entry[0] if p]
+            if paths:
+                result.append({"name": name, "paths": paths})
+        result.sort(key=lambda x: x["name"])
     except Exception:
-        return []
+        pass
+    return result
 
 
-def start_download(url, folder_type, filename=None):
-    """启动一个下载任务。返回 {ok} 或 {error}。"""
+def _all_registered_paths():
+    """所有注册模型路径的白名单集合（归一化）"""
+    out = set()
+    try:
+        for _name, entry in folder_paths.folder_names_and_paths.items():
+            for p in entry[0]:
+                if p:
+                    out.add(os.path.normcase(os.path.realpath(os.path.abspath(p))))
+    except Exception:
+        pass
+    return out
+
+
+def start_download(url, folder_type, filename=None, dest_dir=None):
+    """启动一个下载任务。返回 {ok} 或 {error}。
+
+    dest_dir: 可选，指定注册路径中的某个绝对路径（同一目录名可能注册多个路径）。
+              未提供时使用该 folder_type 注册的第一个路径。
+    """
     global _thread
 
     url = (url or "").strip()
@@ -75,14 +98,21 @@ def start_download(url, folder_type, filename=None):
         if _state["running"]:
             return {"error": "已有下载任务进行中，请等待完成或稍后再试"}
 
-    # 目标目录必须是注册的模型目录
+    # 目标目录：必须是 folder_paths 注册的模型路径
     try:
         paths = folder_paths.get_folder_paths(folder_type)
     except Exception:
         paths = []
     if not paths:
         return {"error": "未知或不可用的模型目录: %s" % folder_type}
-    dest_dir = os.path.abspath(paths[0])
+
+    if dest_dir:
+        want = os.path.normcase(os.path.realpath(os.path.abspath(dest_dir)))
+        if want not in _all_registered_paths():
+            return {"error": "目标目录不在注册的模型路径白名单内: %s" % dest_dir}
+        dest_dir = os.path.abspath(dest_dir)
+    else:
+        dest_dir = os.path.abspath(paths[0])
 
     # 目标目录可能尚未在磁盘上创建（插件注册的自定义目录常见），自动创建
     try:
@@ -116,6 +146,11 @@ def start_download(url, folder_type, filename=None):
         try:
             with requests.get(url, stream=True, timeout=(15, 120), headers=_UA, allow_redirects=True) as r:
                 r.raise_for_status()
+                # 预检：网页类响应直接拒绝（如 Civitai 未登录跳转、失效候选）
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype:
+                    raise RuntimeError("链接返回的是网页而不是文件（可能需要登录或候选已失效），请换其他候选来源")
+
                 total = int(r.headers.get("Content-Length", 0) or 0)
                 with _lock:
                     _state["total"] = total
@@ -148,16 +183,32 @@ def start_download(url, folder_type, filename=None):
                     pass
                 err = "已取消"
             else:
-                # 确保目录仍在（极少数情况下载过程中被删），再原子改名
+                # 内容校验：拒绝网页 / Git LFS 指针等假文件（HTTP 200 但不是模型本体）
+                head = b""
                 try:
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    os.replace(part, target)
+                    with open(part, "rb") as f2:
+                        head = f2.read(512)
+                except OSError:
+                    pass
+                low = head.lstrip()[:64].lower()
+                if low.startswith((b"<!doctype", b"<html")) or head.startswith(b"version https://git-lfs"):
                     try:
-                        usage_tracker.record(target)
-                    except Exception:
+                        os.remove(part)
+                    except OSError:
                         pass
-                except OSError as e:
-                    err = "保存失败: %s" % e
+                    err = ("链接返回的是网页/占位文件而非模型本体"
+                           "（候选可能需要登录或已失效），请换其他候选来源或手动下载")
+                else:
+                    # 确保目录仍在（极少数情况下载过程中被删），再原子改名
+                    try:
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        os.replace(part, target)
+                        try:
+                            usage_tracker.record(target)
+                        except Exception:
+                            pass
+                    except OSError as e:
+                        err = "保存失败: %s" % e
 
             with _lock:
                 _state["running"] = False
