@@ -84,6 +84,12 @@ def start_download(url, folder_type, filename=None):
         return {"error": "未知或不可用的模型目录: %s" % folder_type}
     dest_dir = os.path.abspath(paths[0])
 
+    # 目标目录可能尚未在磁盘上创建（插件注册的自定义目录常见），自动创建
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+    except OSError as e:
+        return {"error": "无法创建目标目录 %s: %s" % (dest_dir, e)}
+
     # 文件名净化 + 扩展名白名单
     raw_name = filename or url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
     name = os.path.basename(raw_name)
@@ -142,11 +148,16 @@ def start_download(url, folder_type, filename=None):
                     pass
                 err = "已取消"
             else:
-                os.replace(part, target)
+                # 确保目录仍在（极少数情况下载过程中被删），再原子改名
                 try:
-                    usage_tracker.record(target)
-                except Exception:
-                    pass
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    os.replace(part, target)
+                    try:
+                        usage_tracker.record(target)
+                    except Exception:
+                        pass
+                except OSError as e:
+                    err = "保存失败: %s" % e
 
             with _lock:
                 _state["running"] = False
