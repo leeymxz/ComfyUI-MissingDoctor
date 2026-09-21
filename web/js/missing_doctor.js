@@ -584,52 +584,6 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
         if (!s.running && s.done) clearInterval(timer);
     }, 1000);
 }
-    }
-    return MD_FOLDERS;
-}
-
-async function startModelDownload(url, filename, defaultFolder, hintEl) {
-    const folders = await getFolders();
-    const def = (defaultFolder && folders.includes(defaultFolder)) ? defaultFolder : folders[0];
-    const folder = prompt(
-        "选择要下载到的模型目录（可修改）：\n" + folders.join(" / "),
-        def || "checkpoints");
-    if (!folder) return;
-    if (!folders.includes(folder)) { alert("目录不在模型库列表中: " + folder); return; }
-
-    const start = await mdFetch("/md/download_start", {
-        method: "POST", body: { url, folder_type: folder, filename } });
-    if (!start.ok) { alert("下载启动失败：" + (start.error || "未知错误")); return; }
-
-    // 轮询进度
-    const timer = setInterval(async () => {
-        let s;
-        try { s = await mdFetch("/md/download_status"); } catch (e) { return; }
-        if (hintEl) {
-            if (s.running) {
-                hintEl.innerHTML = "";
-                const bar = el("div", { class: "md-progress" }, [
-                    el("div", { style: `width:${s.percent}%` }),
-                    el("span", { class: "md-progress-text",
-                        text: `⬇ ${s.filename} ${fmtBytes(s.downloaded)} / ${fmtBytes(s.total)} · ${fmtBytes(s.speed)}/s · ${s.percent}%` }),
-                ]);
-                hintEl.appendChild(bar);
-            } else if (s.done) {
-                clearInterval(timer);
-                hintEl.innerHTML = "";
-                if (s.error) {
-                    hintEl.appendChild(el("div", { class: "md-error", text: "下载失败：" + s.error }));
-                } else {
-                    hintEl.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
-                        el("div", { class: "md-title", style: "color:#7fdc9a", text: "✅ 下载完成: " + s.filename }),
-                        el("div", { class: "md-meta", text: "已保存到 models/" + s.folder_type + " ，重新打开工作流即可使用" }),
-                    ]));
-                }
-            }
-        }
-        if (!s.running && s.done) clearInterval(timer);
-    }, 1000);
-}
 
 function renderModelsTab(body) {
     const resultBox = el("div");
