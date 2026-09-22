@@ -1370,7 +1370,6 @@ async function checkUpdate(box) {
             text: "无法连接 GitHub（" + e.message + "）。请手动到仓库主页查看是否有更新：github.com/leeymxz/ComfyUI-MissingDoctor" }));
     }
 }
-}
 
 // ---------------------------------------------------------------- Tab4: 清理
 
