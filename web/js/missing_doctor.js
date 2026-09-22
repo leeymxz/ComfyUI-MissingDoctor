@@ -531,6 +531,24 @@ async function getFolders() {
     return MD_FOLDERS;
 }
 
+function guessFolderName(filename, defaultFolder) {
+    // 检测已有目录提示时直接采用；否则按文件名关键词智能推断
+    if (defaultFolder) return defaultFolder;
+    const n = (filename || "").toLowerCase();
+    const rules = [
+        ["vae", "vae"], ["lora", "loras"], ["clip", "text_encoders"],
+        ["text_encoder", "text_encoders"], ["unet", "diffusion_models"],
+        ["diffusion", "diffusion_models"], ["upscale", "upscale_models"],
+        ["ultralytics", "ultralytics_bbox"], ["sam", "sams"],
+        ["controlnet", "controlnet"], ["embed", "embeddings"],
+        ["ipadapter", "ipadapter"], ["ckpt", "checkpoints"], ["checkpoint", "checkpoints"],
+    ];
+    for (const [kw, dir] of rules) {
+        if (n.includes(kw)) return dir;
+    }
+    return "";
+}
+
 async function startModelDownload(url, filename, defaultFolder, hintEl) {
     const folders = await getFolders();
     // 每个注册路径一个选项（同一目录名可能有多路径）
@@ -541,7 +559,19 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
                            label: `${f.name} — ${p || "(默认路径)"}` });
         });
     });
-    const defIdx = Math.max(0, options.findIndex(o => defaultFolder && o.name === defaultFolder));
+    // 智能推断推荐目录：置顶 + 标记
+    const guessed = guessFolderName(filename, defaultFolder);
+    let defIdx = 0;
+    if (guessed) {
+        const gi = options.findIndex(o => o.name === guessed);
+        if (gi >= 0) {
+            const [rec] = options.splice(gi, 1);
+            rec.label = "★ 推荐 " + rec.label;
+            options.unshift(rec);
+        } else {
+            options[0].label = "★ 推荐（按文件名猜测） " + options[0].label;
+        }
+    }
 
     // 内联选择器：下拉选注册路径 + 自定义路径输入
     hintEl.innerHTML = "";
