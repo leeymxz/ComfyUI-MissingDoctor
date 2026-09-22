@@ -368,13 +368,14 @@ HF_HOSTS = [
 def search_huggingface(filename, folder_hint=None, limit=4):
     """HuggingFace 模型搜索（自动尝试镜像）。
 
-    若在仓库文件列表中找到与目标文件名一致的文件，给出 resolve 直链；
-    否则给出仓库页链接。
+    - 仓库内找到与目标文件名一致的文件 → 返回 resolve 直链（kind=file，可直接下载）
+    - 未找到同名文件 → 返回仓库页链接并标记 kind=repo（仅作参考，不作为下载候选）
     """
     q = _base_query(filename)
     if not q:
         return []
     target = os.path.basename(str(filename)).lower()
+    target_stem = os.path.splitext(target)[0]
 
     for host in HF_HOSTS:
         out = []
@@ -386,15 +387,24 @@ def search_huggingface(filename, folder_hint=None, limit=4):
                 if not mid:
                     continue
                 direct = None
+                near = None
                 for s in (m.get("siblings") or []):
                     rf = s.get("rfilename") or ""
-                    if os.path.basename(rf).lower() == target:
+                    base = os.path.basename(rf).lower()
+                    if base == target:
                         direct = host + "/" + mid + "/resolve/main/" + rf
                         break
+                    if not near and target_stem and target_stem in base and base.endswith((".safetensors", ".sft", ".gguf", ".ckpt")):
+                        near = (host + "/" + mid + "/resolve/main/" + rf, base)
                 if direct:
-                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, target), "url": direct})
+                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, target),
+                                "url": direct, "kind": "file"})
+                elif near:
+                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, near[1]),
+                                "url": near[0], "kind": "file"})
                 else:
-                    out.append({"source": "huggingface", "title": mid, "url": host + "/" + mid})
+                    out.append({"source": "huggingface", "title": mid,
+                                "url": host + "/" + mid, "kind": "repo"})
             if out:
                 return out[:limit]
         except Exception:

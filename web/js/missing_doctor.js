@@ -609,17 +609,20 @@ function renderModelsTab(body) {
                 return;
             }
             for (const d of results) {
+                const isRepo = d.kind === "repo" || !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(d.url || "");
                 searchResult.appendChild(el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
-                    el("button", { class: "md-btn", text: "⬇ 下载到模型库", onclick: () =>
-                        startModelDownload(d.url, d.filename, null, searchResult) }),
-                    el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
+                    isRepo
+                        ? el("span", { class: "md-pill info", title: "这是仓库页而非文件直链，请进仓库找对应文件手动下载", text: "📁 仓库参考" })
+                        : el("button", { class: "md-btn", text: "⬇ 下载到模型库", onclick: () =>
+                            startModelDownload(d.url, d.filename, null, searchResult) }),
+                    !isRepo ? el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
                         navigator.clipboard.writeText(d.url).then(() => {
                             ev.target.textContent = "已复制 ✓";
                             setTimeout(() => (ev.target.textContent = "复制链接"), 1500);
                         });
-                    } }),
+                    } }) : null,
                 ]));
             }
         } catch (e) {
@@ -673,17 +676,20 @@ function renderModelsTab(body) {
         for (const m of data.missing_models) {
             const hintEl = el("div");
             const dlLinks = (m.downloads || []).map(d => {
+                const isRepo = d.kind === "repo" || !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(d.url || "");
                 const row = el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
-                    el("button", { class: "md-btn", text: "⬇ 下载到模型库", title: "直接下载到 ComfyUI 对应模型目录",
-                        onclick: () => startModelDownload(d.url, d.filename || m.value, m.folders_hint && m.folders_hint[0], hintEl) }),
-                    el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
+                    isRepo
+                        ? el("span", { class: "md-pill info", title: "这是仓库页而非文件直链，请进仓库找对应文件手动下载", text: "📁 仓库参考" })
+                        : el("button", { class: "md-btn", text: "⬇ 下载到模型库", title: "直接下载到 ComfyUI 对应模型目录",
+                            onclick: () => startModelDownload(d.url, d.filename || m.value, m.folders_hint && m.folders_hint[0], hintEl) }),
+                    !isRepo ? el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
                         navigator.clipboard.writeText(d.url).then(() => {
                             ev.target.textContent = "已复制 ✓";
                             setTimeout(() => (ev.target.textContent = "复制链接"), 1500);
                         });
-                    } }),
+                    } }) : null,
                 ]);
                 return row;
             });
