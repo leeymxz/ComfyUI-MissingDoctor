@@ -57,14 +57,30 @@ CIVITAI_TYPE_MAP = {
 
 # ---------------------------------------------------------------- 基础 HTTP
 
-def _http_get_json(url):
-    if _HAS_REQUESTS:
-        r = requests.get(url, timeout=HTTP_TIMEOUT, headers=_UA)
-        r.raise_for_status()
-        return r.json()
-    req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def _http_get_json(url, retries=1):
+    """GET JSON，失败自动重试一次（hf-mirror 偶发限流 429）"""
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            if _HAS_REQUESTS:
+                r = requests.get(url, timeout=HTTP_TIMEOUT, headers=_UA)
+                if r.status_code in (429, 503) and attempt < retries:
+                    time.sleep(2)
+                    continue
+                r.raise_for_status()
+                return r.json()
+            req = urllib.request.Request(url, headers=_UA)
+            try:
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 503) and attempt < retries:
+                    time.sleep(2)
+                    continue
+                raise
+        except Exception as e:
+            last_err = e
+    raise last_err if last_err else RuntimeError("请求失败")
 
 
 def _cache_path(key):
@@ -368,12 +384,67 @@ HF_HOSTS = [
 def search_huggingface(filename, folder_hint=None, limit=4):
     """HuggingFace 模型搜索（自动尝试镜像）。
 
-    - 仓库内找到与目标文件名一致的文件 → 返回 resolve 直链（kind=file，可直接下载）
-    - 未找到同名文件 → 返回仓库页链接并标记 kind=repo（仅作参考，不作为下载候选）
+    注意：hf-mirror 的搜索列表 API 不返回 siblings（files=true 被忽略），
+    因此对候选仓库逐个调用详情 API 确认文件后再给出直链。
+
+    - 仓库内找到与目标文件名一致的文件 → resolve 直链（kind=file，可直接下载）
+    - 未找到同名文件 → 仓库页链接并标记 kind=repo（仅作参考，不作为下载候选）
     """
     q = _base_query(filename)
     if not q:
         return []
+    target = os.path.basename(str(filename)).lower()
+    target_stem = os.path.splitext(target)[0]
+
+    for host in HF_HOSTS:
+        out = []
+        try:
+            url = host + "/api/models?search=" + quote(q) + "&limit=5"
+            data = _http_get_json(url)
+            repos = []
+            for m in (data or [])[:limit]:
+                mid = m.get("id") or m.get("modelId")
+                if mid:
+                    repos.append(mid)
+            if not repos:
+                continue
+
+            for mid in repos:
+                # 列表 API 不含 siblings（hf-mirror），用详情 API 确认文件
+                sib = []
+                try:
+                    time.sleep(0.5)  # hf-mirror 限流保护
+                    detail = _http_get_json(host + "/api/models/" + quote(mid) + "?files=true")
+                    sib = detail.get("siblings") or []
+                except Exception:
+                    sib = []
+
+                direct = None
+                near = None
+                for s in sib:
+                    rf = s.get("rfilename") or ""
+                    base = os.path.basename(rf).lower()
+                    if base == target:
+                        direct = host + "/" + mid + "/resolve/main/" + rf
+                        break
+                    if (not near and target_stem and target_stem in base
+                            and base.endswith((".safetensors", ".sft", ".gguf", ".ckpt"))):
+                        near = (host + "/" + mid + "/resolve/main/" + rf, base)
+
+                if direct:
+                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, target),
+                                "url": direct, "kind": "file"})
+                elif near:
+                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, near[1]),
+                                "url": near[0], "kind": "file"})
+                else:
+                    out.append({"source": "huggingface", "title": mid,
+                                "url": host + "/" + mid, "kind": "repo"})
+            if out:
+                return out[:limit]
+        except Exception:
+            continue
+    return []
     target = os.path.basename(str(filename)).lower()
     target_stem = os.path.splitext(target)[0]
 
