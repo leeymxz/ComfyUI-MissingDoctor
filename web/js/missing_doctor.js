@@ -658,6 +658,23 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
     hintEl.appendChild(picker);
 }
 
+// 判断候选是否为"仓库页"（而非文件直链）
+// 优先用后端 kind 字段；无 kind 时按 URL 形状推断：
+//  - 含 /resolve/ → 文件直链
+//  - HF 域且路径仅 owner/repo 两段 → 仓库页（仓库名可能恰好带扩展名）
+//  - 其余按扩展名判断
+function isRepoCandidate(d) {
+    if (d.kind === "file") return false;
+    if (d.kind === "repo") return true;
+    const url = d.url || "";
+    if (/\/resolve\//.test(url)) return false;
+    if (/hf-mirror\.com|huggingface\.co/i.test(url)) {
+        const path = url.replace(/^https?:\/\/[^/]+\//, "").split("?")[0];
+        if (path.split("/").filter(Boolean).length <= 2) return true;
+    }
+    return !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(url);
+}
+
 function renderModelsTab(body) {
     const resultBox = el("div");
     const dlStatus = el("div");
@@ -682,7 +699,7 @@ function renderModelsTab(body) {
                 return;
             }
             for (const d of results) {
-                const isRepo = d.kind === "repo" || !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(d.url || "");
+                const isRepo = isRepoCandidate(d);
                 searchResult.appendChild(el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
@@ -749,7 +766,7 @@ function renderModelsTab(body) {
         for (const m of data.missing_models) {
             const hintEl = el("div");
             const dlLinks = (m.downloads || []).map(d => {
-                const isRepo = d.kind === "repo" || !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(d.url || "");
+                const isRepo = isRepoCandidate(d);
                 const row = el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
