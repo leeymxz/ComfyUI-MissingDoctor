@@ -82,11 +82,34 @@ def _all_registered_paths():
     return out
 
 
+# 自定义路径黑名单（系统关键目录不允许作为下载目标）
+_CUSTOM_DENY = re.compile(
+    r"^[a-z]:\\(windows|program files( \(x86\))?|programdata)(\\|$)", re.I)
+
+
+def _validate_custom_dir(dest_dir):
+    """自定义路径校验：非系统关键目录、非盘符根。返回 (ok, error)"""
+    try:
+        rp = os.path.normcase(os.path.realpath(os.path.abspath(dest_dir)))
+    except Exception:
+        return False, "路径无效"
+    drive, tail = os.path.splitdrive(rp)
+    if not drive or not tail.strip("\\/"):
+        return False, "不能选择盘符根目录，请选择一个子文件夹"
+    if _CUSTOM_DENY.match(rp):
+        return False, "不允许下载到系统关键目录（Windows/Program Files/ProgramData）"
+    if "$recycle.bin" in rp:
+        return False, "路径无效"
+    return True, ""
+
+
 def start_download(url, folder_type, filename=None, dest_dir=None):
     """启动一个下载任务。返回 {ok} 或 {error}。
 
-    dest_dir: 可选，指定注册路径中的某个绝对路径（同一目录名可能注册多个路径）。
-              未提供时使用该 folder_type 注册的第一个路径。
+    dest_dir: 可选。
+      - 提供注册路径中的绝对路径 → 精确选择（同一目录名可能注册多个路径）
+      - 提供自定义路径 → 通过黑名单校验后使用（任意文件夹）
+      - 未提供 → 使用该 folder_type 注册的第一个路径
     """
     global _thread
 
@@ -98,21 +121,26 @@ def start_download(url, folder_type, filename=None, dest_dir=None):
         if _state["running"]:
             return {"error": "已有下载任务进行中，请等待完成或稍后再试"}
 
-    # 目标目录：必须是 folder_paths 注册的模型路径
+    # 目标目录：注册路径优先，其次用户自定义（黑名单校验）
     try:
         paths = folder_paths.get_folder_paths(folder_type)
     except Exception:
         paths = []
-    if not paths:
-        return {"error": "未知或不可用的模型目录: %s" % folder_type}
 
     if dest_dir:
         want = os.path.normcase(os.path.realpath(os.path.abspath(dest_dir)))
-        if want not in _all_registered_paths():
-            return {"error": "目标目录不在注册的模型路径白名单内: %s" % dest_dir}
-        dest_dir = os.path.abspath(dest_dir)
-    else:
+        registered = _all_registered_paths()
+        if want in registered:
+            dest_dir = os.path.abspath(dest_dir)
+        else:
+            ok, err = _validate_custom_dir(dest_dir)
+            if not ok:
+                return {"error": err}
+            dest_dir = os.path.abspath(dest_dir)
+    elif paths:
         dest_dir = os.path.abspath(paths[0])
+    else:
+        return {"error": "未知或不可用的模型目录: %s" % folder_type}
 
     # 目标目录可能尚未在磁盘上创建（插件注册的自定义目录常见），自动创建
     try:

@@ -533,56 +533,99 @@ async function getFolders() {
 
 async function startModelDownload(url, filename, defaultFolder, hintEl) {
     const folders = await getFolders();
-    // 构建选项列表（目录名 + 实际绝对路径）
+    // 每个注册路径一个选项（同一目录名可能有多路径）
     const options = [];
     folders.forEach(f => {
-        f.paths.forEach((p, pi) => {
-            options.push({ name: f.name, path: p, label: `${f.name} — ${p || "(默认路径)"}`,
-                           isDefault: defaultFolder && f.name === defaultFolder && pi === 0 });
+        (f.paths || []).forEach(p => {
+            options.push({ name: f.name, path: p,
+                           label: `${f.name} — ${p || "(默认路径)"}` });
         });
     });
-    const defIdx = Math.max(0, options.findIndex(o => o.isDefault));
-    const listText = options.map((o, i) => `${i + 1}) ${o.label}`).join("\n");
-    const input = prompt("选择下载目标目录（输入序号）：\n" + listText, String(defIdx + 1));
-    if (input === null) return;
-    const pick = options[parseInt(input, 10) - 1];
-    if (!pick) { alert("序号无效"); return; }
-    if (!pick.path) { alert("该目录无有效路径"); return; }
+    const defIdx = Math.max(0, options.findIndex(o => defaultFolder && o.name === defaultFolder));
 
-    const start = await mdFetch("/md/download_start", {
-        method: "POST", body: { url, filename, folder_type: pick.name, dest_dir: pick.path } });
-    if (!start.ok) { alert("下载启动失败：" + (start.error || "未知错误")); return; }
+    // 内联选择器：下拉选注册路径 + 自定义路径输入
+    hintEl.innerHTML = "";
+    const picker = el("div", { class: "md-card", style: "border-color:#4a6fa5" }, [
+        el("div", { class: "md-title", text: "📂 选择下载目标目录" }),
+        el("div", { class: "md-row" }, [
+            el("span", { text: "文件: ", style: "font-size:12px;color:#aaa" }),
+            el("span", { style: "font-size:12px;color:#ddd", text: filename }),
+        ]),
+    ]);
+    const sel = el("select", { class: "md-input", style: "width:100%;max-width:640px" },
+        options.map((o, i) => el("option", { value: String(i), text: o.label })));
+    sel.value = String(defIdx);
 
-    // 轮询进度
-    const timer = setInterval(async () => {
-        let s;
-        try { s = await mdFetch("/md/download_status"); } catch (e) { return; }
-        if (hintEl) {
-            if (s.running) {
-                hintEl.innerHTML = "";
-                const bar = el("div", { class: "md-progress" }, [
-                    el("div", { style: `width:${s.percent}%` }),
-                    el("span", { class: "md-progress-text",
-                        text: `⬇ ${s.filename} ${fmtBytes(s.downloaded)} / ${fmtBytes(s.total)} · ${fmtBytes(s.speed)}/s · ${s.percent}%` }),
-                ]);
-                hintEl.appendChild(bar);
-            } else if (s.done) {
-                clearInterval(timer);
-                hintEl.innerHTML = "";
-                if (s.error) {
-                    hintEl.appendChild(el("div", { class: "md-error", text: "下载失败：" + s.error }));
-                } else {
-                    hintEl.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
-                        el("div", { class: "md-title", style: "color:#7fdc9a", text: "✅ 下载完成: " + s.filename }),
-                        el("div", { class: "md-meta", style: "color:#8ab4ff;word-break:break-all",
-                            text: "已保存到: " + s.target }),
-                        el("div", { class: "md-meta", text: "重新打开工作流即可使用" }),
-                    ]));
-                }
-            }
+    const customCheck = el("input", { type: "checkbox", class: "md-check", id: "md-custom-dl" });
+    const customInput = el("input", { class: "md-input", style: "flex:1;min-width:300px;display:none",
+        placeholder: "输入完整文件夹路径，如 H:\\ComfyUI\\ComfyUI\\models\\checkpoints" });
+    customCheck.addEventListener("change", () => {
+        customInput.style.display = customCheck.checked ? "block" : "none";
+        sel.style.display = customCheck.checked ? "none" : "block";
+    });
+
+    const startBtn = el("button", { class: "md-btn", text: "⬇ 开始下载", onclick: async () => {
+        let dest = null, folderName = "";
+        if (customCheck.checked) {
+            dest = customInput.value.trim();
+            if (!dest) { alert("请输入自定义路径"); return; }
+            folderName = dest.split("\\").pop() || dest;
+        } else {
+            const o = options[parseInt(sel.value, 10)] || options[0];
+            dest = o.path;
+            folderName = o.name;
         }
-        if (!s.running && s.done) clearInterval(timer);
-    }, 1000);
+        try {
+            const start = await mdFetch("/md/download_start", {
+                method: "POST", body: { url, filename, folder_type: folderName, dest_dir: dest } });
+            if (!start.ok) { alert("下载启动失败：" + (start.error || "未知错误")); return; }
+            picker.remove();
+            // 轮询进度
+            const timer = setInterval(async () => {
+                let s;
+                try { s = await mdFetch("/md/download_status"); } catch (e) { return; }
+                if (hintEl) {
+                    if (s.running) {
+                        hintEl.innerHTML = "";
+                        const bar = el("div", { class: "md-progress" }, [
+                            el("div", { style: `width:${s.percent}%` }),
+                            el("span", { class: "md-progress-text",
+                                text: `⬇ ${s.filename} ${fmtBytes(s.downloaded)} / ${fmtBytes(s.total)} · ${fmtBytes(s.speed)}/s · ${s.percent}%` }),
+                        ]);
+                        hintEl.appendChild(bar);
+                    } else if (s.done) {
+                        clearInterval(timer);
+                        hintEl.innerHTML = "";
+                        if (s.error) {
+                            hintEl.appendChild(el("div", { class: "md-error", text: "下载失败：" + s.error }));
+                        } else {
+                            hintEl.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+                                el("div", { class: "md-title", style: "color:#7fdc9a", text: "✅ 下载完成: " + s.filename }),
+                                el("div", { class: "md-meta", style: "color:#8ab4ff;word-break:break-all",
+                                    text: "已保存到: " + s.target }),
+                                el("div", { class: "md-meta", text: "重新打开工作流即可使用" }),
+                            ]));
+                        }
+                    }
+                }
+                if (!s.running && s.done) clearInterval(timer);
+            }, 1000);
+        } catch (e) { alert("下载启动失败：" + e.message); }
+    } });
+
+    picker.appendChild(el("div", { class: "md-row", style: "align-items:flex-start" }, [
+        el("div", { style: "flex:1;min-width:280px" }, [
+            el("div", { style: "font-size:11px;color:#888;margin-bottom:4px", text: "注册的模型目录：" }),
+            sel,
+        ]),
+    ]));
+    picker.appendChild(el("div", { class: "md-row", style: "align-items:center" }, [
+        customCheck,
+        el("label", { for: "md-custom-dl", text: "自定义路径（任意文件夹）", style: "font-size:12px;color:#aaa;cursor:pointer" }),
+    ]));
+    picker.appendChild(customInput);
+    picker.appendChild(el("div", { class: "md-row" }, [startBtn]));
+    hintEl.appendChild(picker);
 }
 
 function renderModelsTab(body) {
