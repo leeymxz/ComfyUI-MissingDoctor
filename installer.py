@@ -151,6 +151,9 @@ def start_install(items):
                 with _lock:
                     if proc.returncode == 0:
                         job["status"] = STATUS_DONE
+                        # 检测插件是否自带 requirements.txt（提醒用户装依赖）
+                        job["has_requirements"] = os.path.isfile(
+                            os.path.join(job["target"], "requirements.txt"))
                     else:
                         job["status"] = STATUS_FAILED
                         tail = (proc.stderr or proc.stdout or "").strip().splitlines()

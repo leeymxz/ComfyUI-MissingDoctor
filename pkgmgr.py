@@ -64,6 +64,25 @@ def install_packages(packages):
     return _run(["install", "--disable-pip-version-check", "--no-input"] + pkgs)
 
 
+def install_requirements_file(path):
+    """pip install -r <插件 requirements.txt>（路径须位于 custom_nodes 内）"""
+    import folder_paths
+
+    if not path or not os.path.isfile(path):
+        return {"error": "requirements 文件不存在"}
+    rp = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    if os.path.basename(rp).lower() != "requirements.txt":
+        return {"error": "仅允许安装 requirements.txt"}
+    base = getattr(folder_paths, "base_path", None)
+    if base:
+        cn = os.path.normcase(os.path.realpath(os.path.join(os.path.abspath(base), "custom_nodes")))
+        if not rp.startswith(cn + os.sep):
+            return {"error": "路径不在 custom_nodes 内，已拒绝"}
+    else:
+        return {"error": "无法定位 custom_nodes 目录"}
+    return _run(["install", "--disable-pip-version-check", "--no-input", "-r", rp])
+
+
 def uninstall_package(name):
     """pip uninstall 单个包（兼容旧接口）"""
     return uninstall_packages([name])

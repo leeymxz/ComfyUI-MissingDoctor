@@ -281,7 +281,11 @@ async def h_env_heavy(request):
 async def h_pip_install(request):
     try:
         body = await _body(request)
-        result = pkgmgr.install_packages(body.get("packages") or [])
+        req_file = body.get("requirements_file")
+        if req_file:
+            result = pkgmgr.install_requirements_file(req_file)
+        else:
+            result = pkgmgr.install_packages(body.get("packages") or [])
         if "error" in result:
             return _err(result["error"], 400)
         return _json({"status": "ok", "data": result})

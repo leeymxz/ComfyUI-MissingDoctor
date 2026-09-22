@@ -361,14 +361,25 @@ async function startNodeInstall(items, hintEl) {
             const list = el("div");
             for (const j of s.jobs) {
                 const icon = { done: "✅", exists: "⏭", failed: "❌", cloning: "⏳", pending: "•" }[j.status] || "•";
-                list.appendChild(el("div", { style: "font-size:12px;margin-bottom:3px" }, [
-                    el("span", { text: `${icon} ${j.name} ` }),
-                    el("span", { style: "color:#888;font-size:11px", text:
-                        j.status === "done" ? "安装成功" :
-                        j.status === "exists" ? "目录已存在，跳过" :
-                        j.status === "failed" ? "失败：" + (j.error || "") :
-                        j.status === "cloning" ? "克隆中…" : "等待中" }),
-                ]));
+                const statusText =
+                    j.status === "done" ? "安装成功" :
+                    j.status === "exists" ? "目录已存在，跳过" :
+                    j.status === "failed" ? "失败：" + (j.error || "") :
+                    j.status === "cloning" ? "克隆中…" : "等待中";
+                const kids = [el("span", { text: `${icon} ${j.name} ` }),
+                              el("span", { style: "color:#888;font-size:11px", text: statusText })];
+                if (j.status === "done" && j.has_requirements) {
+                    kids.push(el("button", { class: "md-btn ghost", text: "🧩 装依赖",
+                        title: "该插件自带 requirements.txt，一键安装依赖（否则重启后插件可能加载失败）",
+                        onclick: async () => {
+                            try {
+                                await mdFetch("/md/pip_install", { method: "POST",
+                                    body: { requirements_file: j.target + "/requirements.txt" } });
+                                watchPip();
+                            } catch (e) { alert("安装失败：" + e.message); }
+                        } }));
+                }
+                list.appendChild(el("div", { style: "font-size:12px;margin-bottom:3px" }, kids));
             }
             hintEl.appendChild(list);
             if (s.done_count >= s.total) {
@@ -487,10 +498,10 @@ function renderNodesTab(body) {
                                 await startNodeInstall([{ url: repo, title: ct }], installBox);
                             } catch (e) { alert("安装启动失败：" + e.message); }
                         } }),
-                    el("button", { class: "md-btn ghost", text: "复制 clone 命令", onclick: () => {
+                    el("button", { class: "md-btn ghost", text: "复制 clone 命令", onclick: (ev) => {
                         navigator.clipboard.writeText(`git clone "${repo}"`).then(() => {
-                            const b = event.target; b.textContent = "已复制 ✓";
-                            setTimeout(() => (b.textContent = "复制 clone 命令"), 1500);
+                            ev.target.textContent = "已复制 ✓";
+                            setTimeout(() => (ev.target.textContent = "复制 clone 命令"), 1500);
                         });
                     } }),
                 ]);

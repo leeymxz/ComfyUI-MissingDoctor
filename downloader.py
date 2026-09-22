@@ -12,8 +12,10 @@ ComfyUI-MissingDoctor - 模型直接下载器
 
 import os
 import re
+import shutil
 import threading
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -23,6 +25,10 @@ from . import usage_tracker
 from .aged import MODEL_EXTS
 
 _UA = {"User-Agent": "ComfyUI-MissingDoctor/1.0"}
+
+# 内网/本机地址黑名单（防 SSRF：不允许下载器访问内网服务）
+_HOST_DENY = re.compile(
+    r"^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[::1\]|.*\.local$)", re.I)
 
 _lock = threading.Lock()
 _state = {
@@ -117,6 +123,14 @@ def start_download(url, folder_type, filename=None, dest_dir=None):
     if not url.startswith("https://"):
         return {"error": "仅支持 https 下载链接"}
 
+    # SSRF 防护：拒绝内网/本机地址
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if not host or _HOST_DENY.match(host):
+        return {"error": "不允许的下载地址（内网/本机地址）: %s" % host}
+
     with _lock:
         if _state["running"]:
             return {"error": "已有下载任务进行中，请等待完成或稍后再试"}
@@ -180,8 +194,22 @@ def start_download(url, folder_type, filename=None, dest_dir=None):
                     raise RuntimeError("链接返回的是网页而不是文件（可能需要登录或候选已失效），请换其他候选来源")
 
                 total = int(r.headers.get("Content-Length", 0) or 0)
-                with _lock:
-                    _state["total"] = total
+            with _lock:
+                _state["total"] = total
+
+                # 磁盘空间预检：已知大小时确保剩余空间充足（含 10% 余量）
+                if total > 0:
+                    try:
+                        import shutil as _shutil
+                        free = _shutil.disk_usage(os.path.dirname(part)).free
+                        if free < total * 1.1:
+                            raise RuntimeError(
+                                "磁盘空间不足：需要约 %.1f GB，目标盘仅剩 %.1f GB"
+                                % (total / 1024 ** 3, free / 1024 ** 3))
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        pass  # 空间检查失败不阻塞下载
 
                 part = target + ".part"
                 downloaded = 0

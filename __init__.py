@@ -11,9 +11,11 @@ WEB_DIRECTORY = "./web/js"
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
+MISSING_DOCTOR_VERSION = "1.1.0"
+
 __all__ = ["WEB_DIRECTORY", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
-print("[MissingDoctor] 加载中...")
+print(f"[MissingDoctor] v{MISSING_DOCTOR_VERSION} 加载中...")
 
 try:
     from . import usage_tracker

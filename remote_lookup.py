@@ -490,7 +490,7 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
     - 查询结果（含空结果）短缓存 NEG_TTL，弱网下避免重复超时
     """
     budget = QUERY_BUDGET if budget is None else float(budget)
-    cache_key = "dl_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or "")
+    cache_key = "sugg_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or "")
     cached = _load_cache(cache_key, NEG_TTL)
     if cached is not None:
         return cached

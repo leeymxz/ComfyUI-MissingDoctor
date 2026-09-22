@@ -35,12 +35,12 @@ def _all_folder_lists():
     return out
 
 
-def _find_file_in_folders(value, folder_names, lists):
-    """在指定目录集合中查找文件名，返回命中的目录名列表"""
+def _find_file_in_folders(value, folder_names, lower_lists):
+    """在指定目录集合中查找文件名（Windows 文件系统大小写不敏感，统一 lower 比对）"""
+    v = value.lower()
     found = []
     for fn in folder_names:
-        names = lists.get(fn) or []
-        if value in names:
+        if v in lower_lists.get(fn, ()):
             found.append(fn)
     return found
 
@@ -71,7 +71,9 @@ def check_missing_models(workflow):
     """
     _, refs = parse_workflow(workflow)
     lists = _all_folder_lists()
-    all_folder_names = list(lists.keys())
+    # 大小写不敏感匹配（Windows 文件系统特性）
+    lower_lists = {fn: frozenset(n.lower() for n in names) for fn, names in lists.items()}
+    all_folder_names = list(lower_lists.keys())
 
     missing, found = [], 0
     for ref in refs:
@@ -79,9 +81,9 @@ def check_missing_models(workflow):
         hints = ref.get("folders_hint") or []
         # 优先在提示目录中找，找不到再全目录兜底（避免新版/旧版目录名差异漏报）
         search_dirs = hints if hints else all_folder_names
-        hit = _find_file_in_folders(value, search_dirs, lists)
+        hit = _find_file_in_folders(value.lower(), search_dirs, lower_lists)
         if not hit:
-            hit = _find_file_in_folders(value, all_folder_names, lists)
+            hit = _find_file_in_folders(value.lower(), all_folder_names, lower_lists)
 
         if hit:
             found += 1
