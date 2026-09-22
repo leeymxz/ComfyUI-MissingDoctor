@@ -221,6 +221,8 @@ function buildDialog() {
         MD.dialogEl = el("div", { id: "md-dialog" }, [
             el("div", { id: "md-head", title: "按住可拖动窗口" }, [
                 el("h3", { text: "🩺 ComfyUI 体检中心" }),
+                el("span", { id: "md-ver-badge", class: "md-pill info", text: "v…",
+                             title: "MissingDoctor 版本号（环境标签页可检查更新）" }),
                 el("span", { class: "md-sub", text: "MissingDoctor · 缺失检测 / 下载推荐 / 老旧模型 / 清理" }),
                 el("button", { id: "md-close", text: "✕", title: "关闭（Esc / 点击空白处也可关闭）",
                     onclick: closeDialog }),
@@ -331,6 +333,15 @@ function openDialog() {
     document.getElementById("md-stale-bar")?.remove();
     workflowSignature().then(s => { MD.wfSig = s.sig; });
     startStaleWatch();
+    // 异步填充标题栏版本徽标
+    loadAbout;
+    (async () => {
+        try {
+            if (!MD_VER_CACHE) MD_VER_CACHE = await mdFetch("/md/version");
+            const badge = document.getElementById("md-ver-badge");
+            if (badge) badge.textContent = "v" + MD_VER_CACHE.version;
+        } catch (e) { /* ignore */ }
+    })();
 }
 
 function closeDialog() {
@@ -1288,6 +1299,77 @@ function renderEnvTab(body) {
     ]));
     body.appendChild(heavyBox);
     body.appendChild(pipBox);
+
+    // ---------- 关于 / 检查更新 ----------
+    const aboutBox = el("div");
+    body.appendChild(el("div", { class: "md-card" }, [
+        el("div", { class: "md-row", style: "margin-bottom:6px" }, [
+            el("div", { class: "md-title", text: "ℹ️ 关于 / 检查更新" }),
+            el("button", { class: "md-btn ghost", text: "🔄 检查更新", onclick: () => checkUpdate(aboutBox) }),
+        ]),
+    ]));
+    body.appendChild(aboutBox);
+    loadAbout(aboutBox);
+}
+
+let MD_VER_CACHE = null;
+
+async function loadAbout(box) {
+    box.innerHTML = "";
+    box.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "读取版本信息..."]));
+    try {
+        if (!MD_VER_CACHE) MD_VER_CACHE = await mdFetch("/md/version");
+        const d = MD_VER_CACHE;
+        box.innerHTML = "";
+        box.appendChild(el("div", { class: "md-card" }, [
+            el("div", { class: "md-row" }, [
+                el("span", { class: "md-pill info", text: "MissingDoctor v" + d.version }),
+                d.comfyui ? el("span", { class: "md-pill info", text: "ComfyUI " + d.comfyui }) : null,
+            ]),
+            el("div", { style: "font-size:12px;margin-top:4px" }, [
+                el("span", { style: "color:#888", text: "插件位置: " }),
+                el("span", { style: "color:#8ab4ff;font-family:monospace;font-size:11px;word-break:break-all", text: d.plugin_path }),
+            ]),
+            el("div", { class: "md-row", style: "margin-top:6px" }, [
+                el("a", { class: "md-link", href: d.repo_url, target: "_blank", text: "GitHub 仓库（求 Star ⭐）" }),
+            ]),
+            el("div", { id: "md-update-result" }),
+        ]));
+    } catch (e) {
+        box.innerHTML = "";
+        box.appendChild(el("div", { class: "md-error", text: "版本读取失败：" + e.message }));
+    }
+}
+
+async function checkUpdate(box) {
+    const out = box.querySelector("#md-update-result");
+    if (!out) return;
+    out.innerHTML = "";
+    out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在连接 GitHub..."]));
+    let local = MD_VER_CACHE ? MD_VER_CACHE.version : "?";
+    try {
+        const r = await fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/commits?per_page=1");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        const sha = j[0].sha.slice(0, 7);
+        const date = (j[0].commit.committer.date || "").replace("T", " ").slice(0, 16);
+        const msg = (j[0].commit.message || "").split("\n")[0].slice(0, 80);
+        out.innerHTML = "";
+        out.appendChild(el("div", { class: "md-card" }, [
+            el("div", { class: "md-row" }, [
+                el("span", { class: "md-pill info", text: "本地版本 v" + local }),
+                el("span", { class: "md-pill info", text: "远端最新提交 " + sha + "（" + date + "）" }),
+            ]),
+            el("div", { class: "md-meta", text: msg }),
+            el("div", { class: "md-meta", style: "color:#ffb060",
+                text: "如远端有更新：在 custom_nodes/ComfyUI-MissingDoctor 目录执行 git pull，然后重启 ComfyUI" }),
+        ]));
+    } catch (e) {
+        out.innerHTML = "";
+        out.appendChild(el("div", { class: "md-error",
+            text: "无法连接 GitHub（" + e.message + "）。请手动到仓库主页查看是否有更新：github.com/leeymxz/ComfyUI-MissingDoctor" }));
+    }
+}
 }
 
 // ---------------------------------------------------------------- Tab4: 清理

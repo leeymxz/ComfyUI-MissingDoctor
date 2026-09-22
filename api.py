@@ -11,9 +11,11 @@ ComfyUI-MissingDoctor - HTTP API 路由
 - POST /md/cleanup          执行清理（必须 confirm=true）
 """
 
+import os
 import time
 import traceback
 
+import folder_paths
 from aiohttp import web
 from server import PromptServer
 
@@ -326,6 +328,28 @@ async def h_pip_status(request):
         return _err(e)
 
 
+async def h_version(request):
+    try:
+        import sys
+        from .version import VERSION, REPO_URL
+        base = getattr(folder_paths, "base_path", None)
+        data = {
+            "version": VERSION,
+            "repo_url": REPO_URL,
+            "plugin_path": os.path.dirname(os.path.abspath(__file__)),
+            "comfyui_base": os.path.abspath(base) if base else None,
+            "python": sys.version.split()[0],
+        }
+        try:
+            import comfyui_version  # noqa
+            data["comfyui"] = getattr(comfyui_version, "__version__", "unknown")
+        except Exception:
+            data["comfyui"] = "unknown"
+        return _json({"status": "ok", "data": data})
+    except Exception as e:
+        return _err(e)
+
+
 # ---------------------------------------------------------------- 注册
 
 ROUTES = [
@@ -347,6 +371,7 @@ ROUTES = [
     ("POST", "/md/pip_install", h_pip_install),
     ("POST", "/md/pip_uninstall", h_pip_uninstall),
     ("GET", "/md/pip_status", h_pip_status),
+    ("GET", "/md/version", h_version),
 ]
 
 
