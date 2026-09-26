@@ -178,11 +178,10 @@ def parse_workflow(workflow):
             refs += r
         if ui:
             ct_ui, r_ui = extract_from_ui(ui)
-            # class_type 以 prompt（API 格式）为准——UI 格式会混入前端虚拟节点
-            # （如 rgthree 的 Label/Fast Groups Bypasser，纯前端实现无需安装）
-            # 导致误报缺失。仅当 prompt 不可用时才采用 UI 的节点类型。
-            if not ct:
-                class_types += ct_ui
+            # 两类来源都要合并：prompt（API 格式）可能被前端排除掉"缺失节点占位符"
+            # （此时原生缺失节点包面板有提示、prompt 里却没有）——漏报比误报更糟。
+            # UI 来源已过滤 UI_ONLY_NODES（rgthree 虚拟节点/Note 等），不会回归误报。
+            class_types += ct_ui
             merged = {x["value"].lower(): x for x in refs}
             for item in r_ui:
                 k = item["value"].lower()
