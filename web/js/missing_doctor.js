@@ -697,7 +697,8 @@ function isRepoCandidate(d) {
     if (d.kind === "file") return false;
     if (d.kind === "repo") return true;
     const url = d.url || "";
-    if (/\/resolve\//.test(url)) return false;
+    if (/\/api\/download\//.test(url)) return false;   // Civitai 稳定下载直链
+    if (/\/resolve\//.test(url)) return false;          // HF resolve 直链
     if (/hf-mirror\.com|huggingface\.co/i.test(url)) {
         const path = url.replace(/^https?:\/\/[^/]+\//, "").split("?")[0];
         if (path.split("/").filter(Boolean).length <= 2) return true;
@@ -707,25 +708,42 @@ function isRepoCandidate(d) {
 
 function renderAdvice(advice, container) {
     if (!advice) return;
+    // 国内站点一键搜索引导（始终显示）
+    const kw = (advice.query || "").trim();
+    const enc = encodeURIComponent(kw || "");
+    const sites = [
+        ["🇨🇳 ModelScope 魔搭", "https://modelscope.cn/search?searchContent=" + enc],
+        ["🇨🇳 LiblibAI 哩布哩布", "https://www.liblib.art/search?keyword=" + enc],
+        ["🌍 Civitai", "https://civitai.com/search/" + enc],
+        ["🌍 HF 镜像", "https://hf-mirror.com/search?fulltext=1&q=" + enc],
+    ];
     if (advice.found) {
         container.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
             el("div", { class: "md-title", style: "color:#7fdc9a", text: "💡 候选可信度说明" }),
             el("div", { style: "font-size:12px;color:#aaa", text: advice.tips.join("  ") }),
         ]));
-        return;
+    } else {
+        const card = el("div", { class: "md-card", style: "border-color:#6e5a20" }, [
+            el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没有找到现成候选，但还有这些办法：" }),
+            el("div", { class: "md-meta", text: advice.reason || "" }),
+        ]);
+        const ul = el("div", { style: "font-size:12px;line-height:1.9" });
+        (advice.tips || []).forEach((t, i) => {
+            ul.appendChild(el("div", {
+                style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
+                text: t }));
+        });
+        card.appendChild(ul);
+        container.appendChild(card);
     }
-    const card = el("div", { class: "md-card", style: "border-color:#6e5a20" }, [
-        el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没有找到现成候选，但还有这些办法：" }),
-        el("div", { class: "md-meta", text: advice.reason || "" }),
+    // 国内站点搜索按钮组
+    const siteRow = el("div", { class: "md-row", style: "margin:4px 0 10px" }, [
+        el("span", { text: "🔎 去这些站点搜索「" + kw + "」：", style: "font-size:12px;color:#aaa" }),
     ]);
-    const ul = el("div", { style: "font-size:12px;line-height:1.9" });
-    (advice.tips || []).forEach((t, i) => {
-        ul.appendChild(el("div", {
-            style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
-            text: t }));
+    sites.forEach(([label, url]) => {
+        siteRow.appendChild(el("a", { class: "md-link", href: url, target: "_blank", text: label }));
     });
-    card.appendChild(ul);
-    container.appendChild(card);
+    container.appendChild(siteRow);
 }
 
 function renderModelsTab(body) {

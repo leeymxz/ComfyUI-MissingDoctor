@@ -395,18 +395,24 @@ def search_civitai(filename, folder_hint=None, limit=3):
         data = _http_get_json(url)
         out = []
         for item in (data.get("items") or [])[:limit]:
-            files = item.get("files") or []
+            # 下载直链：优先 files[].downloadUrl，其次由 modelVersions[0] 构造稳定直链
             durl, fname = None, None
+            files = item.get("files") or []
             if files:
                 durl = files[0].get("downloadUrl")
                 fname = files[0].get("name")
+            if not durl:
+                versions = item.get("modelVersions") or []
+                if versions and versions[0].get("id"):
+                    durl = "https://civitai.com/api/download/models/%s" % versions[0]["id"]
+            exact = bool(fname) and os.path.basename(fname).lower() == os.path.basename(str(filename)).lower()
             out.append({
                 "source": "civitai",
                 "title": item.get("name"),
                 "url": durl or ("https://civitai.com/models/%s" % item.get("id") if item.get("id") else None),
                 "filename": fname,
                 "type": item.get("type"),
-                "match": "search",
+                "match": "exact" if (exact and durl) else "search",
             })
         return [x for x in out if x.get("url")]
     except Exception:
