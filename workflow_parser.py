@@ -21,6 +21,9 @@ MODEL_EXTS = {
 UI_ONLY_NODES = {
     "Note", "MarkdownNote", "Reroute", "PrimitiveNode",
     "PrimitiveString", "PrimitiveStringMultiline", "ComfyUINoteNode",
+    # rgthree 的纯前端虚拟节点（无需后端安装）
+    "Fast Groups Bypasser (rgthree)", "Label (rgthree)",
+    "Fast Bypasser (rgthree)", "Mute/Bypass Repeater (rgthree)",
 }
 
 # 常见输入名 -> 可能的模型目录
@@ -174,8 +177,12 @@ def parse_workflow(workflow):
             class_types += ct
             refs += r
         if ui:
-            ct, r = extract_from_ui(ui)
-            class_types += ct
+            ct_ui, r_ui = extract_from_ui(ui)
+            # class_type 以 prompt（API 格式）为准——UI 格式会混入前端虚拟节点
+            # （如 rgthree 的 Label/Fast Groups Bypasser，纯前端实现无需安装）
+            # 导致误报缺失。仅当 prompt 不可用时才采用 UI 的节点类型。
+            if not ct:
+                class_types += ct_ui
             merged = {x["value"].lower(): x for x in refs}
             for item in r:
                 k = item["value"].lower()
