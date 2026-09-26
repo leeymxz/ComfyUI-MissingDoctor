@@ -89,6 +89,12 @@ async def h_check_models(request):
             finally:
                 ex.shutdown(wait=False)
 
+        # 空结果/稀少结果时附上原因与行动指引
+        try:
+            data["advice"] = remote_lookup.search_advice(
+                (missing[0]["value"] if missing else ""), results_count=len(missing))
+        except Exception:
+            pass
         return _json({"status": "ok", "data": data})
     except Exception as e:
         traceback.print_exc()
@@ -103,7 +109,8 @@ async def h_remote_search(request):
         if not q:
             return _err("query 不能为空", 400)
         results = remote_lookup.suggest_model_downloads(q, ftype)
-        return _json({"status": "ok", "data": {"query": q, "results": results}})
+        advice = remote_lookup.search_advice(q, ftype, results_count=len(results))
+        return _json({"status": "ok", "data": {"query": q, "results": results, "advice": advice}})
     except Exception as e:
         traceback.print_exc()
         return _err(e)

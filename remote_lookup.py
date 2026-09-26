@@ -39,8 +39,10 @@ MANAGER_RAW_URLS = [
     "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json",
 ]
 MODEL_DB_URLS = [
-    "https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main/model-db.json",
-    "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/model-db.json",
+    # Manager 官方维护的模型下载库（564+ 条目，含 name+url），jsdelivr 国内可达
+    "https://cdn.jsdelivr.net/gh/ltdrdata/ComfyUI-Manager@main/model-list.json",
+    "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/model-list.json",
+    "https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main/model-list.json",
 ]
 
 CIVITAI_TYPE_MAP = {
@@ -415,6 +417,34 @@ HF_HOSTS = [
     "https://hf-mirror.com",     # 国内镜像，优先（API 与官方兼容）
     "https://huggingface.co",
 ]
+
+
+def search_advice(filename, folder_hint=None, results_count=0):
+    """候选搜索结果为空/稀少时，给出原因分析与行动指引"""
+    q = _base_query(filename)
+    if results_count > 0:
+        return {
+            "found": True,
+            "tips": [
+                "✓ 带「文件匹配」的候选与缺失文件名精确一致，最可靠",
+                "~ 「近似文件」请先核对是否为目标模型（可能是低显存版/不同作者版）",
+                "🔍 「搜索候选」来自关键词搜索，可能是同名不同款，下载前务必核对",
+            ],
+        }
+    return {
+        "found": False,
+        "query": q,
+        "reason": ("已查询：Manager 官方模型库（564+ 条目）、Civitai、HuggingFace（国内镜像）。"
+                   "未找到同名或近似候选——通常因为模型较新/较冷门、文件名较特殊，或需要登录下载。"),
+        "tips": [
+            "1️⃣ 用下方「手动搜索」改更短的关键词重试（去掉版本号、精度后缀、作者前缀）",
+            "2️⃣ 浏览器打开 civitai.com 直接搜索模型名",
+            "3️⃣ 浏览器打开 hf-mirror.com 搜索（国内可达的 HuggingFace 镜像）",
+            "4️⃣ 如果模型来自某个工作流分享页/教程，回原页面找下载链接",
+            "5️⃣ 检查缺失文件名的拼写（下划线/连字符/大小写）",
+            "6️⃣ Civitai 与 HuggingFace 部分模型需登录下载：浏览器登录后用「复制链接」手动下载",
+        ],
+    }
 
 
 def search_huggingface(filename, folder_hint=None, limit=4):

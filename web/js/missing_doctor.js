@@ -705,6 +705,29 @@ function isRepoCandidate(d) {
     return !/\.(safetensors|sft|gguf|ckpt|pth|pt2|bin|onnx|zip|tar\.gz)(\?|$)/i.test(url);
 }
 
+function renderAdvice(advice, container) {
+    if (!advice) return;
+    if (advice.found) {
+        container.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+            el("div", { class: "md-title", style: "color:#7fdc9a", text: "💡 候选可信度说明" }),
+            el("div", { style: "font-size:12px;color:#aaa", text: advice.tips.join("  ") }),
+        ]));
+        return;
+    }
+    const card = el("div", { class: "md-card", style: "border-color:#6e5a20" }, [
+        el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没有找到现成候选，但还有这些办法：" }),
+        el("div", { class: "md-meta", text: advice.reason || "" }),
+    ]);
+    const ul = el("div", { style: "font-size:12px;line-height:1.9" });
+    (advice.tips || []).forEach((t, i) => {
+        ul.appendChild(el("div", {
+            style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
+            text: t }));
+    });
+    card.appendChild(ul);
+    container.appendChild(card);
+}
+
 function renderModelsTab(body) {
     const resultBox = el("div");
     const dlStatus = el("div");
@@ -725,9 +748,11 @@ function renderModelsTab(body) {
             searchResult.innerHTML = "";
             const results = r.results || [];
             if (!results.length) {
-                searchResult.appendChild(el("div", { class: "md-empty", text: "没搜到候选，试试更短的关键词（去掉版本号/精度后缀）" }));
+                searchResult.appendChild(el("div", { class: "md-empty", text: "没搜到候选" }));
+                renderAdvice(r.advice, searchResult);
                 return;
             }
+            renderAdvice(r.advice, searchResult);
             for (const d of results) {
                 const isRepo = isRepoCandidate(d);
                 const matchBadge = isRepo ? null :
@@ -836,6 +861,7 @@ function renderModelsTab(body) {
                 hintEl,
             ]));
         }
+        renderAdvice(data.advice, resultBox);
     }
 
     body.appendChild(dlStatus);
