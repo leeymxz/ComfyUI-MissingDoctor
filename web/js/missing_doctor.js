@@ -765,7 +765,7 @@ function renderModelsTab(body) {
     const dlStatus = el("div");
     const runBtn = el("button", { class: "md-btn", text: "🔍 检测当前工作流", onclick: () => run() });
     const searchInput = el("input", { class: "md-input", style: "min-width:260px",
-        placeholder: "手动搜索下载地址（输入模型文件名或关键词）",
+        placeholder: "搜索模型名（支持粘贴魔搭 ModelScope 模型页链接，直接给出下载直链）",
         onkeydown: (e) => { if (e.key === "Enter") doSearch(); } });
     const searchResult = el("div");
 

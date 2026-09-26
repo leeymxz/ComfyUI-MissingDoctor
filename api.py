@@ -13,6 +13,7 @@ ComfyUI-MissingDoctor - HTTP API 路由
 
 import asyncio
 import os
+import re
 import time
 import traceback
 
@@ -108,6 +109,19 @@ async def h_remote_search(request):
         ftype = body.get("type")
         if not q:
             return _err("query 不能为空", 400)
+
+        # 魔搭（ModelScope）模型页链接：解析为下载直链
+        if re.match(r"https?://(?:www\.)?modelscope\.cn/models/", q):
+            results, model_id = await asyncio.to_thread(
+                remote_lookup.search_modelscope_by_url, q, body.get("filename"))
+            advice = {"found": bool(results),
+                      "query": q,
+                      "tips": ["🇨🇳 已解析魔搭模型：%s" % (model_id or q),
+                               "✓ 文件匹配 = 与缺失模型同名；~ 近似 = 相似名（请核对）",
+                               "🔍 其他 = 该仓库内的其它模型文件"]}
+            return _json({"status": "ok", "data": {"query": q, "results": results or [],
+                                                   "advice": advice}})
+
         results = await asyncio.to_thread(remote_lookup.suggest_model_downloads, q, ftype)
         advice = remote_lookup.search_advice(q, ftype, results_count=len(results))
         return _json({"status": "ok", "data": {"query": q, "results": results, "advice": advice}})

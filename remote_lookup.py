@@ -585,6 +585,52 @@ def search_advice(filename, folder_hint=None, results_count=0):
     }
 
 
+MODEL_FILE_PATTERNS = (".safetensors", ".ckpt", ".gguf", ".pth", ".pt", ".bin", ".sft", ".onnx")
+
+
+def search_modelscope_by_url(url, target_name=None):
+    """解析魔搭（ModelScope）模型页链接 → 文件列表 → 匹配模型文件直链。
+
+    输入形如 https://modelscope.cn/models/{owner}/{name}
+    魔搭文件列表与下载直链 API 公开可用（搜索 API 需登录，故用链接解析方式）。
+    返回 (候选列表, 模型标识) 或 (None, None)。
+    """
+    m = re.match(r"https?://(?:www\.)?modelscope\.cn/models/([^/]+)/([^/?#]+)", url or "")
+    if not m:
+        return None, None
+    owner, name = m.group(1), m.group(2)
+    target = os.path.basename(str(target_name or "")).lower()
+    target_stem = os.path.splitext(target)[0]
+
+    files_url = ("https://modelscope.cn/api/v1/models/%s/%s/repo/files"
+                 "?Recursive=true&Revision=master" % (owner, name))
+    try:
+        data = _http_get_json(files_url)   # 内建重试
+        fl = (data.get("Data") or {}).get("Files") or []
+    except Exception:
+        fl = []
+
+    out = []
+    for f in fl:
+        p = f.get("Path") or ""
+        pl = p.lower()
+        if not pl.endswith(MODEL_FILE_PATTERNS):
+            continue
+        label = p.split("/")[-1]
+        dl = ("https://modelscope.cn/api/v1/models/%s/%s/repo?FilePath=%s&Revision=master"
+              % (owner, name, quote(p)))
+        lb = label.lower()
+        if target and (lb == target or lb.endswith(target)):
+            match = "exact"
+        elif target and target_stem and target_stem in pl:
+            match = "near"
+        else:
+            match = "search"
+        out.append({"source": "modelscope", "title": "%s/%s · %s" % (owner, name, label),
+                    "url": dl, "kind": "file", "filename": label, "match": match})
+    return out, ("%s/%s" % (owner, name))
+
+
 def search_huggingface(filename, folder_hint=None, limit=4):
     """HuggingFace 模型搜索（自动尝试镜像）。
 
