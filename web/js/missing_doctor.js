@@ -502,7 +502,7 @@ function renderNodesTab(body) {
                 const badge = s.match === "manager-db"
                     ? el("span", { class: "md-pill ok", title: "来自 ComfyUI-Manager 数据库匹配", text: "📚 库匹配" })
                     : (s.verify === true
-                        ? el("span", { class: "md-pill ok", title: "该仓库 README 中确实包含此节点名", text: "✓ README 已确认" })
+                        ? el("span", { class: "md-pill ok", title: "该仓库 README 中提及此节点名（建议点链接核对后安装）", text: "📖 README 提及" })
                         : (s.verify === false
                             ? el("span", { class: "md-pill bad", title: "仓库 README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
                             : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证 README", text: "🔍 搜索候选" })));

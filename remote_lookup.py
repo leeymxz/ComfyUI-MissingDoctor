@@ -283,28 +283,28 @@ def suggest_node_sources(class_type):
     """缺失节点的安装来源建议。
 
     1. Manager 数据库精确/模式匹配
-    2. GitHub 搜索兜底（整名 → CamelCase 两词组合 → 最长单词），
+    2. GitHub 搜索兜底，查询逐级放宽：
+       整名 → 整名短语+in:readme（在 README 内容里搜，命中正确仓库概率高）
+       → CamelCase 组合短语+in:readme → 最长单词
        并对候选做 README 实据验证（verify: True 确认 / False 未找到 / None 无法验证）
     """
     results = []
     for r in find_repo_for_node(class_type):
         results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
     if not results:
-        queries = ["ComfyUI " + class_type]
         words = _camel_words(class_type)
-        cands = []
+        phrases = [class_type]
         for i in range(len(words) - 1):
-            combo = words[i] + words[i + 1]
-            cands.append(combo)
-        for c in sorted(set(cands), key=len, reverse=True)[:2]:
-            q = "ComfyUI " + c
-            if q not in queries:
-                queries.append(q)
+            phrases.append(words[i] + " " + words[i + 1])
         if words:
-            longest = max(words, key=len)
-            q = "ComfyUI " + longest
-            if q not in queries:
-                queries.append(q)
+            phrases.append(max(words, key=len))
+
+        queries = ["ComfyUI " + class_type]
+        for p in phrases:
+            queries.append('ComfyUI "%s" in:readme' % p)
+        if words:
+            queries.append("ComfyUI " + max(words, key=len))
+
         for q in queries:
             hits = search_github_repos(q)
             if hits:
