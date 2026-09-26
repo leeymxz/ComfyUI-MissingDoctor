@@ -251,6 +251,97 @@ def _camel_words(s):
     return re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+", s)
 
 
+def _repo_code_verify(repo_url, node_name):
+    """代码级验证：用 jsDelivr 文件树找到仓库 .py 源文件，
+    抓取内容检查是否定义了该节点（NODE_CLASS_MAPPINGS["xxx"] / class xxx）。
+    返回 True(代码中确认) / False(代码中无) / None(无法验证)。"""
+    try:
+        import urllib.parse as _up
+        m = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url or "")
+        if not m:
+            return None
+        owner, repo = m.group(1), m.group(2)
+        target = node_name.lower()
+        for branch in ("main", "master"):
+            # 1. 文件树（递归，拼出 .py 完整路径）
+            try:
+                tree_url = ("https://data.jsdelivr.com/v1/packages/gh/%s/%s@%s"
+                            % (owner, repo, branch))
+                tree = _http_get_json(tree_url)
+            except Exception:
+                continue
+            py_files = []
+
+            def walk(node, prefix):
+                if not isinstance(node, dict):
+                    return
+                if node.get("type") == "directory":
+                    for c in node.get("files") or []:
+                        walk(c, prefix + node.get("name", "") + "/")
+                elif node.get("type") == "file":
+                    name = node.get("name", "")
+                    if name.endswith(".py"):
+                        py_files.append(prefix + name)
+            walk(tree, "")
+            if not py_files:
+                continue
+
+            # 2. 优先抓与节点名相关的文件，最多 4 个
+            ranked = sorted(py_files,
+                            key=lambda p: (target.replace(" ", "") in p.lower(), not p.endswith("/__init__.py")),
+                            reverse=True)
+            for p in ranked[:4]:
+                try:
+                    content = _http_get_text("https://cdn.jsdelivr.net/gh/%s/%s@%s/%s"
+                                             % (owner, repo, branch, p), max_bytes=128 * 1024)
+                    low = content.lower()
+                    if ('"%s"' % target in low) or ("'%s'" % target in low):
+                        return True
+                    if ("class %s(" % target) in low:
+                        return True
+                except Exception:
+                    continue
+            return False  # 树与文件都拿到了但代码里没有 → 明确未找到
+    except Exception:
+        return None
+    return None
+
+
+def _http_get_text(url, max_bytes=131072):
+    """抓取文本内容（限长），供代码验证用"""
+    if _HAS_REQUESTS:
+        r = requests.get(url, timeout=8, headers=_UA)
+        if r.status_code == 200:
+            txt = r.text
+            return txt[:max_bytes] if txt else ""
+        return ""
+    req = urllib.request.Request(url, headers=_UA)
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = resp.read(max_bytes)
+        return data.decode("utf-8", "replace")
+
+
+# 文件名 → 模型目录 关键词推断（与前端 guessFolderName 一致，用于提示建议目录）
+_FOLDER_INFER_RULES = [
+    (("vae",), "vae"), (("lora",), "loras"), (("clip",), "text_encoders"),
+    (("unet",), "diffusion_models"), (("diffusion",), "diffusion_models"),
+    (("upscale", "ultrasharp", "esrgan"), "upscale_models"),
+    (("control", "canny", "openpose"), "controlnet"),
+    (("embed", "ti_"), "embeddings"), (("sam",), "sams"),
+    (("ipadapter",), "ipadapter"), (("ckpt",), "checkpoints"),
+    (("checkpoint",), "checkpoints"),
+]
+
+
+def infer_folder_hint(filename):
+    """根据文件名推断应存放的模型目录（供缺失提示与下载默认目录）"""
+    n = (filename or "").lower()
+    for kws, folder in _FOLDER_INFER_RULES:
+        if any(k in n for k in kws):
+            return folder
+    return None
+
+
 def _repo_readme_verify(repo_url, node_name):
     """用 jsDelivr 抓取仓库 README，验证是否真的包含该节点名。
     返回 True(确认) / False(未找到) / None(无法验证，如无 README)"""
@@ -311,9 +402,19 @@ def suggest_node_sources(class_type):
             hits = search_github_repos(q)
             if hits:
                 for g in hits:
+                    repo = g["repo"]
+                    # 代码级验证优先，未果再用 README 验证
+                    code_hit = _repo_code_verify(repo, class_type)
+                    if code_hit is None:
+                        verify = _repo_readme_verify(repo, class_type)
+                        level = "readme" if verify is True else "none" if verify is None else "miss"
+                    elif code_hit:
+                        verify, level = True, "code"
+                    else:
+                        verify, level = False, "miss"
                     results.append({
-                        "repo": g["repo"], "title": g["title"], "match": "github-search",
-                        "verify": _repo_readme_verify(g["repo"], class_type),
+                        "repo": repo, "title": g["title"], "match": "github-search",
+                        "verify": verify, "verify_level": level,
                     })
                 break
     return results[:6]
@@ -561,6 +662,29 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
         if u and u not in seen:
             seen.add(u)
             results.append(item)
+
+    # 预检"精确匹配"的文件直链：HEAD 探测存活/失效/需登录（并行，限 5 条）
+    to_check = [x for x in results if x.get("kind") == "file" and x.get("match") == "exact"][:5]
+    if to_check:
+        ex = ThreadPoolExecutor(max_workers=min(5, len(to_check)))
+
+        def _check(d):
+            try:
+                r = requests.head(d["url"], timeout=8, headers=_UA, allow_redirects=True)
+                st = r.status_code
+                if st in (200, 301, 302, 303):
+                    return
+                if st in (401, 403) and "civitai.com" in d["url"]:
+                    d["auth"] = True
+                elif st in (404, 410, 451):
+                    d["dead"] = True
+            except Exception:
+                pass
+
+        try:
+            ex.map(_check, to_check)
+        finally:
+            ex.shutdown(wait=True)
 
     _save_cache(cache_key, results)
     return results

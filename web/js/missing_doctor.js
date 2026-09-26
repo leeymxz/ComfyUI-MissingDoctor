@@ -501,11 +501,13 @@ function renderNodesTab(body) {
                 const repo = s.repo || "";
                 const badge = s.match === "manager-db"
                     ? el("span", { class: "md-pill ok", title: "来自 ComfyUI-Manager 数据库匹配", text: "📚 库匹配" })
-                    : (s.verify === true
-                        ? el("span", { class: "md-pill ok", title: "该仓库 README 中提及此节点名（建议点链接核对后安装）", text: "📖 README 提及" })
-                        : (s.verify === false
-                            ? el("span", { class: "md-pill bad", title: "仓库 README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
-                            : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证 README", text: "🔍 搜索候选" })));
+                    : (s.verify === true && s.verify_level === "code"
+                        ? el("span", { class: "md-pill ok", title: "已在仓库源码中找到该节点的 NODE_CLASS_MAPPINGS 定义，可放心安装", text: "✓ 代码验证" })
+                        : (s.verify === true
+                            ? el("span", { class: "md-pill ok", title: "该仓库 README 中提及此节点名（建议点链接核对后安装）", text: "📖 README 提及" })
+                            : (s.verify === false
+                                ? el("span", { class: "md-pill bad", title: "仓库源码/README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
+                                : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证源码", text: "🔍 搜索候选" }))));
                 return el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: repo, target: "_blank",
                               text: `${s.title || repo}` }),
@@ -847,20 +849,27 @@ function renderModelsTab(body) {
                 const isRepo = isRepoCandidate(d);
                 const matchBadge = isRepo
                     ? null
-                    : (d.match === "exact"
-                        ? el("span", { class: "md-pill ok", title: "与缺失文件名精确匹配", text: "✓ 文件匹配" })
-                        : (d.match === "near"
-                            ? el("span", { class: "md-pill info", title: "近似文件名，请核对是否为目标模型", text: "~ 近似文件" })
-                            : el("span", { class: "md-pill info", title: "关键词搜索候选，可能不是同一个模型，请核对", text: "🔍 搜索候选" })));
+                    : (d.dead
+                        ? el("span", { class: "md-pill bad", title: "链接已失效（404），换其他候选或手动下载", text: "❌ 已失效" })
+                        : (d.auth
+                            ? el("span", { class: "md-pill info", title: "该下载需要登录 Civitai，请在浏览器登录后使用「复制链接」手动下载", text: "🔒 需登录" })
+                            : (d.match === "exact"
+                                ? el("span", { class: "md-pill ok", title: "与缺失文件名精确匹配且已确认存活", text: "✓ 文件匹配" })
+                                : (d.match === "near"
+                                    ? el("span", { class: "md-pill info", title: "近似文件名，请核对是否为目标模型", text: "~ 近似文件" })
+                                    : el("span", { class: "md-pill info", title: "关键词搜索候选，可能不是同一个模型，请核对", text: "🔍 搜索候选" })))));
                 const row = el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
                     matchBadge,
                     isRepo
                         ? el("span", { class: "md-pill info", title: "这是仓库页而非文件直链，请进仓库找对应文件手动下载", text: "📁 仓库参考" })
-                        : el("button", { class: "md-btn", text: "⬇ 下载到模型库", title: "直接下载到 ComfyUI 对应模型目录",
-                            onclick: () => startModelDownload(d.url, d.filename || m.value, m.folders_hint && m.folders_hint[0], hintEl) }),
-                    !isRepo ? el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
+                        : (d.dead
+                            ? el("span", { class: "md-pill bad", text: "链接失效" })
+                            : el("button", { class: "md-btn", text: d.auth ? "🌐 浏览器下载" : "⬇ 下载到模型库",
+                                title: d.auth ? "登录 Civitai 后在浏览器中下载" : "直接下载到 ComfyUI 对应模型目录",
+                                onclick: () => startModelDownload(d.url, d.filename || m.value, m.folders_hint && m.folders_hint[0], hintEl) })),
+                    !isRepo && !d.dead ? el("button", { class: "md-btn ghost", text: "复制链接", onclick: (ev) => {
                         navigator.clipboard.writeText(d.url).then(() => {
                             ev.target.textContent = "已复制 ✓";
                             setTimeout(() => (ev.target.textContent = "复制链接"), 1500);

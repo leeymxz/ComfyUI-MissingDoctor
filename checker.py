@@ -9,6 +9,7 @@ ComfyUI-MissingDoctor - 缺失检测核心
 import folder_paths
 import nodes as comfy_nodes
 
+from . import remote_lookup
 from .workflow_parser import parse_workflow
 
 
@@ -90,6 +91,11 @@ def check_missing_models(workflow):
             ref["folders"] = hit
         else:
             ref["folders"] = []
+            # 无目录提示时按文件名关键词推断建议目录
+            if not ref.get("folders_hint"):
+                inferred = remote_lookup.infer_folder_hint(value)
+                if inferred:
+                    ref["folders_hint"] = [inferred]
             missing.append(ref)
 
     return {
