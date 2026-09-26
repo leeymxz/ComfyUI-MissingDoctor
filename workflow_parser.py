@@ -184,7 +184,7 @@ def parse_workflow(workflow):
             if not ct:
                 class_types += ct_ui
             merged = {x["value"].lower(): x for x in refs}
-            for item in r:
+            for item in r_ui:
                 k = item["value"].lower()
                 if k in merged:
                     for f in item["folders_hint"]:
