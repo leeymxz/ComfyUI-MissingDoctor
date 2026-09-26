@@ -373,17 +373,26 @@ def _repo_readme_verify(repo_url, node_name):
 
 
 def suggest_node_sources(class_type):
-    """缺失节点的安装来源建议。
+    """缺失节点的安装来源建议（应用社区纠错表）。
 
     1. Manager 数据库精确/模式匹配
-    2. GitHub 搜索兜底，查询逐级放宽：
-       整名 → 整名短语+in:readme（在 README 内容里搜，命中正确仓库概率高）
-       → CamelCase 组合短语+in:readme → 最长单词
-       并对候选做 README 实据验证（verify: True 确认 / False 未找到 / None 无法验证）
+    2. 用户确认过的正确来源（置顶）
+    3. GitHub 搜索兜底 + 代码级/README 实据验证
+    被标记的错误候选自动剔除。
     """
+    from . import corrections
+
     results = []
+    wrong = corrections.wrong_repos(class_type)
     for r in find_repo_for_node(class_type):
-        results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
+        if r["repo"] not in wrong:
+            results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
+
+    # 用户确认过的正确来源置顶
+    for repo in corrections.correct_repos(class_type):
+        if repo not in wrong:
+            results.append({"repo": repo, "title": "★ 用户确认", "match": "user-correct"})
+
     if not results:
         words = _camel_words(class_type)
         phrases = [class_type]
@@ -403,7 +412,8 @@ def suggest_node_sources(class_type):
             if hits:
                 for g in hits:
                     repo = g["repo"]
-                    # 代码级验证优先，未果再用 README 验证
+                    if repo in wrong:
+                        continue
                     code_hit = _repo_code_verify(repo, class_type)
                     if code_hit is None:
                         verify = _repo_readme_verify(repo, class_type)
@@ -621,11 +631,14 @@ def search_huggingface(filename, folder_hint=None, limit=4):
 
 
 def suggest_model_downloads(filename, folder_hint=None, budget=None):
-    """并行查询多个来源给出模型下载建议。
+    """并行查询多个来源给出模型下载建议（应用社区纠错表）。
 
     - 三路并发（Manager 库 / Civitai / HuggingFace），总耗时受 budget 限制
     - 查询结果（含空结果）短缓存 NEG_TTL，弱网下避免重复超时
+    - 用户标记错误的候选剔除；确认正确的置顶
     """
+    from . import corrections
+
     budget = QUERY_BUDGET if budget is None else float(budget)
     cache_key = "sugg_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or "")
     cached = _load_cache(cache_key, NEG_TTL)
@@ -685,6 +698,16 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
             ex.map(_check, to_check)
         finally:
             ex.shutdown(wait=True)
+
+    # 应用社区纠错：剔除错误候选，用户确认的置顶
+    try:
+        wrong = corrections.wrong_repos(os.path.basename(filename))
+        ok = [x for x in results if x.get("url") not in wrong]
+        correct_first = [x for x in ok if x.get("url") in corrections.correct_repos(os.path.basename(filename))]
+        rest = [x for x in ok if x.get("url") not in corrections.correct_repos(os.path.basename(filename))]
+        results = correct_first + rest
+    except Exception:
+        pass
 
     _save_cache(cache_key, results)
     return results

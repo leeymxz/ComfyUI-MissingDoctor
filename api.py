@@ -357,6 +357,29 @@ async def h_version(request):
         return _err(e)
 
 
+async def h_feedback(request):
+    """社区纠错反馈：{type: node|model, key, repo, correct?}"""
+    try:
+        body = await _body(request)
+        from . import corrections
+        kind = body.get("type")
+        key = body.get("key") or ""
+        repo = body.get("repo") or ""
+        if not key or not repo:
+            return _err("缺少 key 或 repo", 400)
+        if kind == "model":
+            import os as _os
+            key = _os.path.basename(key)
+        if body.get("correct"):
+            corrections.mark_correct(key, repo)
+        else:
+            corrections.mark_wrong(key, repo)
+        return _json({"status": "ok", "data": {"accepted": True}})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
 # ---------------------------------------------------------------- 注册
 
 ROUTES = [
@@ -379,6 +402,7 @@ ROUTES = [
     ("POST", "/md/pip_uninstall", h_pip_uninstall),
     ("GET", "/md/pip_status", h_pip_status),
     ("GET", "/md/version", h_version),
+    ("POST", "/md/feedback", h_feedback),
 ]
 
 

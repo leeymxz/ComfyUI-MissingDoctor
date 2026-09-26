@@ -525,6 +525,18 @@ function renderNodesTab(body) {
                             setTimeout(() => (ev.target.textContent = "复制 clone 命令"), 1500);
                         });
                     } }),
+                    el("button", { class: "md-btn ghost", text: "🚩 不对", title: "该候选不是提供此节点的仓库，标记后以后不再推荐",
+                        onclick: async (ev) => {
+                            const correct = prompt("如果知道正确的仓库地址请填写（不知道可直接确定）：", "");
+                            if (correct === null) return;
+                            try {
+                                await mdFetch("/md/feedback", { method: "POST",
+                                    body: { type: "node", key: ct, repo, correct: correct.trim() || undefined } });
+                                ev.target.textContent = "已反馈 ✓";
+                                ev.target.disabled = true;
+                                setTimeout(() => (ev.target.textContent = "🚩 不对"), 2000);
+                            } catch (e) { alert("反馈失败：" + e.message); }
+                        } }),
                 ]);
             });
             resultBox.appendChild(el("div", { class: "md-card" }, [
@@ -875,6 +887,18 @@ function renderModelsTab(body) {
                             setTimeout(() => (ev.target.textContent = "复制链接"), 1500);
                         });
                     } }) : null,
+                    el("button", { class: "md-btn ghost", text: "🚩 不对", title: "该候选不是这个模型/链接不可用，标记后以后不再推荐",
+                        onclick: async (ev) => {
+                            const correct = prompt("如果知道正确的下载地址请填写（不知道可直接确定）：", "");
+                            if (correct === null) return;
+                            try {
+                                await mdFetch("/md/feedback", { method: "POST",
+                                    body: { type: "model", key: m.value, repo: d.url, correct: correct.trim() || undefined } });
+                                ev.target.textContent = "已反馈 ✓";
+                                ev.target.disabled = true;
+                                setTimeout(() => (ev.target.textContent = "🚩 不对"), 2000);
+                            } catch (e) { alert("反馈失败：" + e.message); }
+                        } }),
                 ]);
                 return row;
             });
