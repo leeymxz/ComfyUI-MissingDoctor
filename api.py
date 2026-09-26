@@ -11,6 +11,7 @@ ComfyUI-MissingDoctor - HTTP API 路由
 - POST /md/cleanup          执行清理（必须 confirm=true）
 """
 
+import asyncio
 import os
 import time
 import traceback
@@ -50,11 +51,19 @@ async def h_check_nodes(request):
     try:
         body = await _body(request)
         wf = body.get("workflow") or {}
+        # 检测本身在事件循环内很快（纯内存比对）
         data = checker.check_missing_nodes(wf)
-        suggestions = {}
-        for ct in data.get("missing_nodes", []):
-            suggestions[ct] = remote_lookup.suggest_node_sources(ct)
-        data["suggestions"] = suggestions
+        missing = data.get("missing_nodes", [])
+
+        # 建议查询（含代码级验证等网络请求）必须在线程池执行，否则阻塞整个 ComfyUI 事件循环
+        if missing:
+            async def _one(ct):
+                return ct, await asyncio.to_thread(remote_lookup.suggest_node_sources, ct)
+
+            gathered = await asyncio.gather(*[_one(ct) for ct in missing])
+            data["suggestions"] = dict(gathered)
+        else:
+            data["suggestions"] = {}
         return _json({"status": "ok", "data": data})
     except Exception as e:
         traceback.print_exc()
@@ -68,26 +77,17 @@ async def h_check_models(request):
         data = checker.check_missing_models(wf)
         missing = data.get("missing_models", [])
 
-        # 多个缺失文件并行查询下载建议，避免弱网下串行叠加超时
+        # 下载建议查询在网络线程池执行，避免阻塞事件循环
         if missing:
-            from concurrent.futures import ThreadPoolExecutor
-
-            def _suggest(m):
+            async def _one(m):
                 hint = (m.get("folders_hint") or [None])[0]
-                try:
-                    return m["value"], remote_lookup.suggest_model_downloads(m["value"], hint)
-                except Exception:
-                    return m["value"], []
+                return m["value"], await asyncio.to_thread(
+                    remote_lookup.suggest_model_downloads, m["value"], hint)
 
-            ex = ThreadPoolExecutor(max_workers=min(6, max(1, len(missing))))
-            try:
-                for value, downloads in ex.map(_suggest, missing):
-                    for m in missing:
-                        if m["value"] == value:
-                            m["downloads"] = downloads
-                            break
-            finally:
-                ex.shutdown(wait=False)
+            results = await asyncio.gather(*[_one(m) for m in missing])
+            lookup = dict(results)
+            for m in missing:
+                m["downloads"] = lookup.get(m["value"], [])
 
         # 空结果/稀少结果时附上原因与行动指引
         try:
@@ -108,7 +108,7 @@ async def h_remote_search(request):
         ftype = body.get("type")
         if not q:
             return _err("query 不能为空", 400)
-        results = remote_lookup.suggest_model_downloads(q, ftype)
+        results = await asyncio.to_thread(remote_lookup.suggest_model_downloads, q, ftype)
         advice = remote_lookup.search_advice(q, ftype, results_count=len(results))
         return _json({"status": "ok", "data": {"query": q, "results": results, "advice": advice}})
     except Exception as e:
@@ -126,7 +126,7 @@ async def h_aged_models(request):
         sort = request.query.get("sort", "oldest")
         if sort not in ("oldest", "size"):
             sort = "oldest"
-        data = aged_mod.scan_aged_models(min_age_days=days, sort=sort)
+        data = await asyncio.to_thread(aged_mod.scan_aged_models, min_age_days=days, sort=sort)
         return _json({"status": "ok", "data": data})
     except Exception as e:
         traceback.print_exc()
@@ -140,15 +140,20 @@ async def h_cleanup_preview(request):
         except (TypeError, ValueError):
             output_days = 0
         output_days = max(0.0, min(output_days, 3650.0))
-        data = {}
-        for cat in cleaner.CLEAN_CATEGORIES:
-            targets = cleaner.collect_targets(cat, keep_days=output_days if cat == "output" else 0)
-            data[cat] = {
-                "count": len(targets),
-                "size": sum(t["size"] for t in targets),
-                "paths": [t["path"] for t in targets[:200]],
-            }
-        data["output_days"] = output_days
+
+        def _collect_all():
+            data = {}
+            for cat in cleaner.CLEAN_CATEGORIES:
+                targets = cleaner.collect_targets(cat, keep_days=output_days if cat == "output" else 0)
+                data[cat] = {
+                    "count": len(targets),
+                    "size": sum(t["size"] for t in targets),
+                    "paths": [t["path"] for t in targets[:200]],
+                }
+            data["output_days"] = output_days
+            return data
+
+        data = await asyncio.to_thread(_collect_all)
         return _json({"status": "ok", "data": data})
     except Exception as e:
         traceback.print_exc()
@@ -189,8 +194,12 @@ async def h_cleanup(request):
             except (TypeError, ValueError):
                 keep_days = 0
             keep_days = max(0.0, min(keep_days, 3650.0))
-            targets = cleaner.collect_targets(category, keep_days=keep_days if category == "output" else 0)
-            result = cleaner.delete_paths([t["path"] for t in targets], use_trash=use_trash)
+
+            def _clean():
+                targets = cleaner.collect_targets(category, keep_days=keep_days if category == "output" else 0)
+                return cleaner.delete_paths([t["path"] for t in targets], use_trash=use_trash)
+
+            result = await asyncio.to_thread(_clean)
         else:
             return _err("未知清理类别: %s" % category, 400)
 
@@ -268,7 +277,7 @@ async def h_env_summary(request):
 async def h_env_requirements(request):
     try:
         force = request.query.get("force", "0") == "1"
-        return _json({"status": "ok", "data": envinfo.scan_requirements(force=force)})
+        return _json({"status": "ok", "data": await asyncio.to_thread(envinfo.scan_requirements, force)})
     except Exception as e:
         traceback.print_exc()
         return _err(e)
@@ -281,7 +290,7 @@ async def h_env_heavy(request):
         except (TypeError, ValueError):
             top = 25
         force = request.query.get("force", "0") == "1"
-        return _json({"status": "ok", "data": envinfo.heavy_packages(top=top, force=force)})
+        return _json({"status": "ok", "data": await asyncio.to_thread(envinfo.heavy_packages, top, force)})
     except Exception as e:
         traceback.print_exc()
         return _err(e)

@@ -254,16 +254,26 @@ def _camel_words(s):
 def _repo_code_verify(repo_url, node_name):
     """代码级验证：用 jsDelivr 文件树找到仓库 .py 源文件，
     抓取内容检查是否定义了该节点（NODE_CLASS_MAPPINGS["xxx"] / class xxx）。
-    返回 True(代码中确认) / False(代码中无) / None(无法验证)。"""
+    返回 True(代码中确认) / False(代码中无) / None(无法验证)。结果缓存 24h。"""
     try:
-        import urllib.parse as _up
+        cache_key = "codev_%s_%s" % (
+            re.sub(r"[^a-zA-Z0-9_-]", "_", repo_url),
+            re.sub(r"[^a-zA-Z0-9_-]", "_", str(node_name).lower()))[:160]
+        cached = _load_cache(cache_key, 24 * 3600)
+        if cached is not None:
+            return cached
+    except Exception:
+        cache_key = None
+
+    result = None
+    try:
+        import urllib.parse as _up  # noqa
         m = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url or "")
         if not m:
             return None
         owner, repo = m.group(1), m.group(2)
         target = node_name.lower()
         for branch in ("main", "master"):
-            # 1. 文件树（递归，拼出 .py 完整路径）
             try:
                 tree_url = ("https://data.jsdelivr.com/v1/packages/gh/%s/%s@%s"
                             % (owner, repo, branch))
@@ -286,7 +296,6 @@ def _repo_code_verify(repo_url, node_name):
             if not py_files:
                 continue
 
-            # 2. 优先抓与节点名相关的文件，最多 4 个
             ranked = sorted(py_files,
                             key=lambda p: (target.replace(" ", "") in p.lower(), not p.endswith("/__init__.py")),
                             reverse=True)
@@ -296,15 +305,27 @@ def _repo_code_verify(repo_url, node_name):
                                              % (owner, repo, branch, p), max_bytes=128 * 1024)
                     low = content.lower()
                     if ('"%s"' % target in low) or ("'%s'" % target in low):
-                        return True
+                        result = True
+                        break
                     if ("class %s(" % target) in low:
-                        return True
+                        result = True
+                        break
                 except Exception:
                     continue
-            return False  # 树与文件都拿到了但代码里没有 → 明确未找到
+            if result is not None:
+                break
+            if py_files:
+                result = False  # 树与文件都拿到了但代码里没有 → 明确未找到
+                break
     except Exception:
-        return None
-    return None
+        result = None
+
+    try:
+        if cache_key and result is not None:
+            _save_cache(cache_key, result)
+    except Exception:
+        pass
+    return result
 
 
 def _http_get_text(url, max_bytes=131072):
