@@ -249,11 +249,42 @@ def _camel_words(s):
     return re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+", s)
 
 
+def _repo_readme_verify(repo_url, node_name):
+    """用 jsDelivr 抓取仓库 README，验证是否真的包含该节点名。
+    返回 True(确认) / False(未找到) / None(无法验证，如无 README)"""
+    try:
+        m = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url or "")
+        if not m:
+            return None
+        owner, repo = m.group(1), m.group(2)
+        target = node_name.lower()
+        for branch in ("main", "master"):
+            try:
+                if _HAS_REQUESTS:
+                    r = requests.get(
+                        "https://cdn.jsdelivr.net/gh/%s/%s@%s/README.md" % (owner, repo, branch),
+                        timeout=5, headers=_UA)
+                    if r.status_code == 200:
+                        return target in (r.text or "").lower()
+                else:
+                    req = urllib.request.Request(
+                        "https://cdn.jsdelivr.net/gh/%s/%s@%s/README.md" % (owner, repo, branch),
+                        headers=_UA)
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        return target in resp.read().decode("utf-8", "replace").lower()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
 def suggest_node_sources(class_type):
     """缺失节点的安装来源建议。
 
     1. Manager 数据库精确/模式匹配
-    2. GitHub 搜索兜底：整名 → CamelCase 两词组合 → 最长单词，逐级放宽
+    2. GitHub 搜索兜底（整名 → CamelCase 两词组合 → 最长单词），
+       并对候选做 README 实据验证（verify: True 确认 / False 未找到 / None 无法验证）
     """
     results = []
     for r in find_repo_for_node(class_type):
@@ -278,7 +309,10 @@ def suggest_node_sources(class_type):
             hits = search_github_repos(q)
             if hits:
                 for g in hits:
-                    results.append({"repo": g["repo"], "title": g["title"], "match": "github-search"})
+                    results.append({
+                        "repo": g["repo"], "title": g["title"], "match": "github-search",
+                        "verify": _repo_readme_verify(g["repo"], class_type),
+                    })
                 break
     return results[:6]
 
@@ -335,6 +369,7 @@ def find_model_db_matches(filename):
     for h in hits:
         if h["url"] not in seen:
             seen.add(h["url"])
+            h["match"] = "exact"  # Manager 库按文件名精确匹配
             out.append(h)
     return out[:3]
 
@@ -369,6 +404,7 @@ def search_civitai(filename, folder_hint=None, limit=3):
                 "url": durl or ("https://civitai.com/models/%s" % item.get("id") if item.get("id") else None),
                 "filename": fname,
                 "type": item.get("type"),
+                "match": "search",
             })
         return [x for x in out if x.get("url")]
     except Exception:
@@ -433,49 +469,13 @@ def search_huggingface(filename, folder_hint=None, limit=4):
 
                 if direct:
                     out.append({"source": "huggingface", "title": "%s · %s" % (mid, target),
-                                "url": direct, "kind": "file"})
+                                "url": direct, "kind": "file", "match": "exact"})
                 elif near:
                     out.append({"source": "huggingface", "title": "%s · %s" % (mid, near[1]),
-                                "url": near[0], "kind": "file"})
+                                "url": near[0], "kind": "file", "match": "near"})
                 else:
                     out.append({"source": "huggingface", "title": mid,
-                                "url": host + "/" + mid, "kind": "repo"})
-            if out:
-                return out[:limit]
-        except Exception:
-            continue
-    return []
-    target = os.path.basename(str(filename)).lower()
-    target_stem = os.path.splitext(target)[0]
-
-    for host in HF_HOSTS:
-        out = []
-        try:
-            url = host + "/api/models?search=" + quote(q) + "&files=true&limit=5"
-            data = _http_get_json(url)
-            for m in (data or [])[:limit]:
-                mid = m.get("id") or m.get("modelId")
-                if not mid:
-                    continue
-                direct = None
-                near = None
-                for s in (m.get("siblings") or []):
-                    rf = s.get("rfilename") or ""
-                    base = os.path.basename(rf).lower()
-                    if base == target:
-                        direct = host + "/" + mid + "/resolve/main/" + rf
-                        break
-                    if not near and target_stem and target_stem in base and base.endswith((".safetensors", ".sft", ".gguf", ".ckpt")):
-                        near = (host + "/" + mid + "/resolve/main/" + rf, base)
-                if direct:
-                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, target),
-                                "url": direct, "kind": "file"})
-                elif near:
-                    out.append({"source": "huggingface", "title": "%s · %s" % (mid, near[1]),
-                                "url": near[0], "kind": "file"})
-                else:
-                    out.append({"source": "huggingface", "title": mid,
-                                "url": host + "/" + mid, "kind": "repo"})
+                                "url": host + "/" + mid, "kind": "repo", "match": "search"})
             if out:
                 return out[:limit]
         except Exception:

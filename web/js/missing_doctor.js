@@ -499,9 +499,17 @@ function renderNodesTab(body) {
             const sug = (data.suggestions && data.suggestions[ct]) || [];
             const links = sug.map(s => {
                 const repo = s.repo || "";
+                const badge = s.match === "manager-db"
+                    ? el("span", { class: "md-pill ok", title: "来自 ComfyUI-Manager 数据库匹配", text: "📚 库匹配" })
+                    : (s.verify === true
+                        ? el("span", { class: "md-pill ok", title: "该仓库 README 中确实包含此节点名", text: "✓ README 已确认" })
+                        : (s.verify === false
+                            ? el("span", { class: "md-pill bad", title: "仓库 README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
+                            : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证 README", text: "🔍 搜索候选" })));
                 return el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: repo, target: "_blank",
-                              text: `${s.title || repo} ${s.match === "github-search" ? "（GitHub 搜索）" : ""}` }),
+                              text: `${s.title || repo}` }),
+                    badge,
                     el("button", { class: "md-btn", text: "⚡ 自动安装", title: "git clone 到 custom_nodes，重启 ComfyUI 后生效",
                         onclick: async (ev) => {
                             if (!confirm(`确认安装 ${s.title || repo} 到 custom_nodes 吗？\n安装完成后需要重启 ComfyUI 生效。`)) return;
@@ -722,9 +730,14 @@ function renderModelsTab(body) {
             }
             for (const d of results) {
                 const isRepo = isRepoCandidate(d);
+                const matchBadge = isRepo ? null :
+                    (d.match === "exact"
+                        ? el("span", { class: "md-pill ok", text: "✓ 文件匹配" })
+                        : el("span", { class: "md-pill info", text: d.match === "near" ? "~ 近似文件" : "🔍 搜索候选" }));
                 searchResult.appendChild(el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
+                    matchBadge,
                     isRepo
                         ? el("span", { class: "md-pill info", title: "这是仓库页而非文件直链，请进仓库找对应文件手动下载", text: "📁 仓库参考" })
                         : el("button", { class: "md-btn", text: "⬇ 下载到模型库", onclick: () =>
@@ -789,9 +802,17 @@ function renderModelsTab(body) {
             const hintEl = el("div");
             const dlLinks = (m.downloads || []).map(d => {
                 const isRepo = isRepoCandidate(d);
+                const matchBadge = isRepo
+                    ? null
+                    : (d.match === "exact"
+                        ? el("span", { class: "md-pill ok", title: "与缺失文件名精确匹配", text: "✓ 文件匹配" })
+                        : (d.match === "near"
+                            ? el("span", { class: "md-pill info", title: "近似文件名，请核对是否为目标模型", text: "~ 近似文件" })
+                            : el("span", { class: "md-pill info", title: "关键词搜索候选，可能不是同一个模型，请核对", text: "🔍 搜索候选" })));
                 const row = el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: d.url, target: "_blank",
                         text: `[${d.source}] ${d.title || d.filename || d.url}` }),
+                    matchBadge,
                     isRepo
                         ? el("span", { class: "md-pill info", title: "这是仓库页而非文件直链，请进仓库找对应文件手动下载", text: "📁 仓库参考" })
                         : el("button", { class: "md-btn", text: "⬇ 下载到模型库", title: "直接下载到 ComfyUI 对应模型目录",
