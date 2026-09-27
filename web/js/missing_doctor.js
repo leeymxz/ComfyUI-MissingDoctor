@@ -207,6 +207,7 @@ function buildDialog() {
             ["nodes", "🔎 缺失节点"],
             ["models", "📦 缺失模型"],
             ["aged", "🕰 老旧模型"],
+            ["dedupe", "♻️ 查重"],
             ["cleanup", "🧹 清理"],
             ["env", "🧪 环境"],
         ].map(([id, label]) =>
@@ -292,6 +293,7 @@ function switchTab(id) {
     if (id === "nodes") renderNodesTab(body);
     else if (id === "models") renderModelsTab(body);
     else if (id === "aged") renderAgedTab(body);
+    else if (id === "dedupe") renderDedupeTab(body);
     else if (id === "cleanup") renderCleanupTab(body);
     else if (id === "env") renderEnvTab(body);
 }
@@ -1519,6 +1521,112 @@ async function checkUpdate(box) {
         out.appendChild(el("div", { class: "md-error",
             text: "无法连接 GitHub（" + e.message + "）。请手动到仓库主页查看是否有更新：github.com/leeymxz/ComfyUI-MissingDoctor" }));
     }
+}
+
+// ---------------------------------------------------------------- Tab: 查重
+
+function renderDedupeTab(body) {
+    const resultBox = el("div");
+    const scanBtn = el("button", { class: "md-btn", text: "🔍 扫描重复模型", onclick: () => scan() });
+
+    async function scan() {
+        resultBox.innerHTML = "";
+        resultBox.appendChild(el("div", { class: "md-empty" },
+            [el("span", { class: "md-spin" }), "正在比对模型文件指纹（头/中/尾采样，首次约 1-2 分钟）..."]));
+        scanBtn.disabled = true;
+        try {
+            const d = await mdFetch("/md/duplicates");
+            render(d);
+        } catch (e) {
+            resultBox.innerHTML = "";
+            resultBox.appendChild(el("div", { class: "md-error", text: "扫描失败：" + e.message }));
+        } finally {
+            scanBtn.disabled = false;
+        }
+    }
+
+    function checkedPaths(g) {
+        const keep = g.keep;
+        const checked = new Set();
+        g.files.forEach(f => {
+            const cb = resultBox.querySelector('input[data-path="' + CSS.escape(f.path) + '"]');
+            if (cb && cb.checked && f.path !== keep) checked.add(f.path);
+        });
+        return checked;
+    }
+
+    function render(d) {
+        resultBox.innerHTML = "";
+        if (!d.groups || !d.groups.length) {
+            resultBox.appendChild(el("div", { class: "md-empty", text: "没有发现重复模型 🎉 模型库很干净" }));
+            return;
+        }
+        resultBox.appendChild(el("div", { class: "md-row" }, [
+            el("span", { class: "md-pill bad", text: `${d.group_count} 组重复` }),
+            el("span", { class: "md-pill info", text: `${d.duplicate_count} 个冗余文件 · 可释放 ${fmtBytes(d.waste_total)}` }),
+            el("button", { class: "md-btn danger", text: "🗑 清理全部重复（保留每组主文件）", onclick: async () => {
+                const paths = [];
+                d.groups.forEach(g => g.files.forEach(f => { if (f.path !== g.keep) paths.push(f.path); }));
+                if (!paths.length) return;
+                if (!confirm(`确认删除全部 ${paths.length} 个重复文件（约 ${fmtBytes(d.waste_total)}）吗？\n每组保留一个（优先最近调用的）。删除进入回收站，可恢复。`)) return;
+                try {
+                    const r = await mdFetch("/md/cleanup", { method: "POST",
+                        body: { category: "models", paths, confirm: true } });
+                    alert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}` +
+                          (r.errors && r.errors.length ? "，失败 " + r.errors.length + " 个" : ""));
+                    scan();
+                } catch (e) { alert("清理失败：" + e.message); }
+            } }),
+        ]));
+
+        for (const g of d.groups) {
+            const card = el("div", { class: "md-card" }, [
+                el("div", { class: "md-row", style: "margin-bottom:4px" }, [
+                    el("div", { class: "md-title", style: "margin:0",
+                        text: `⚡ ${g.files.length} 个重复文件 · 各 ${fmtBytes(g.size)} · 可释放 ${fmtBytes(g.waste)}` }),
+                ]),
+                el("div", { class: "md-meta", text: "🟢 保留 = 主文件（推荐最近调用的）；其余为重复副本，可在勾选后删除或另外设为保留" }),
+            ]);
+            const lst = el("div");
+            g.files.forEach(f => {
+                const isKeep = f.path === g.keep;
+                const row = el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap" }, [
+                    isKeep
+                        ? el("span", { class: "md-pill ok", text: "🟢 保留" })
+                        : el("input", { class: "md-check", type: "checkbox", "data-path": f.path, checked: true }),
+                    el("span", { style: "font-size:12px;color:#ddd;word-break:break-all", text: f.rel }),
+                    el("span", { style: "font-size:11px;color:#888",
+                        text: `(${f.folder_type} · 改于 ${fmtDate(f.mtime)}${f.last_used ? " · 📞 最近调用" : ""})` }),
+                    isKeep ? null : el("button", { class: "md-btn ghost", text: "设为保留",
+                        onclick: () => { g.keep = f.path; render(d); } }),
+                ]);
+                lst.appendChild(row);
+            });
+            card.appendChild(lst);
+            card.appendChild(el("div", { class: "md-row", style: "margin-top:6px" }, [
+                el("button", { class: "md-btn", text: "🗑 删除勾选的重复副本", onclick: async () => {
+                    const paths = [...checkedPaths(g)];
+                    if (!paths.length) { alert("本组所有副本都已被勾掉（或没有可选副本）"); return; }
+                    if (!confirm(`删除本组 ${paths.length} 个重复文件（约 ${fmtBytes(paths.length * g.size)}）？删除进入回收站。`)) return;
+                    try {
+                        const r = await mdFetch("/md/cleanup", { method: "POST",
+                            body: { category: "models", paths, confirm: true } });
+                        alert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}`);
+                        scan();
+                    } catch (e) { alert("清理失败：" + e.message); }
+                } }),
+            ]));
+            resultBox.appendChild(card);
+        }
+    }
+
+    body.appendChild(el("div", { class: "md-row" }, [
+        scanBtn,
+        el("span", { class: "md-sub", style: "color:#888;font-size:12px",
+            text: "按文件大小分组 → 同大小组做头/中/尾采样指纹精确比对（非全量哈希，快且几乎不误判）" }),
+    ]));
+    body.appendChild(resultBox);
+    resultBox.appendChild(el("div", { class: "md-empty", text: "点击「扫描重复模型」开始查重" }));
 }
 
 // ---------------------------------------------------------------- Tab4: 清理

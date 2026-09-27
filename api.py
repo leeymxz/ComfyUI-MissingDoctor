@@ -24,6 +24,7 @@ from server import PromptServer
 from . import checker
 from . import aged as aged_mod
 from . import cleaner
+from . import dedupe
 from . import downloader
 from . import envinfo
 from . import installer
@@ -358,6 +359,16 @@ async def h_pip_status(request):
         return _err(e)
 
 
+async def h_duplicates(request):
+    """扫描重复模型（采样指纹比对），耗时扫描线程执行"""
+    try:
+        data = await asyncio.to_thread(dedupe.scan_duplicates)
+        return _json({"status": "ok", "data": data})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
 async def h_version(request):
     try:
         import sys
@@ -426,6 +437,7 @@ ROUTES = [
     ("GET", "/md/pip_status", h_pip_status),
     ("GET", "/md/version", h_version),
     ("POST", "/md/feedback", h_feedback),
+    ("GET", "/md/duplicates", h_duplicates),
 ]
 
 
