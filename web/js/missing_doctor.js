@@ -417,10 +417,10 @@ async function startNodeInstall(items, hintEl) {
     }, 1000);
 }
 
-// 在画布上定位并高亮指定类型的节点（含幽灵节点徽章处理入口）
+// 在画布上定位并高亮指定类型的节点
 function locateNode(ct, ghost) {
-    const nodes = (window.app && window.app.graph && window.app.graph._nodes || [])
-        .filter(n => n.type === ct);
+    const graph = window.app && window.app.graph;
+    const nodes = (graph && graph._nodes || []).filter(n => n.type === ct);
     if (!nodes.length) {
         alert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
         return;
@@ -432,16 +432,27 @@ function locateNode(ct, ghost) {
         n.bgcolor = "#6e2b0a";
         setTimeout(() => { n.bgcolor = old; n.selected = false; }, 1800);
     });
-    // 居中到第一个
     try {
-        const b = nodes[0].getBounding();
         const c = window.app.canvas;
-        const s = (c.ds && c.ds.scale) || 1;
-        c.ds.offset = [-b[0] * s + c.canvas.width / 2 - b[2] * s / 2,
-                       -b[1] * s + c.canvas.height / 2 - b[3] * s / 2];
-        c.setDirty(true, true);
-    } catch (e) { /* ignore */ }
-    window.app.graph.setDirtyCanvas(true, true);
+        if (!c || !c.ds) return;
+        const node = nodes[0];
+        // 子图安全的节点局部坐标
+        const rel = (typeof graph.computeRelativePosition === "function")
+            ? graph.computeRelativePosition(node)
+            : [node.pos[0], node.pos[1]];
+        const size = node.size || [220, 60];
+        // 缩放保底：太小时先放大，保证能看到
+        if ((c.ds.scale || 1) < 0.6) c.ds.scale = 0.6;
+        const s = c.ds.scale;
+        const w = (c.canvas && (c.canvas.width || c.canvas.clientWidth)) || window.innerWidth;
+        const h = (c.canvas && (c.canvas.height || c.canvas.clientHeight)) || window.innerHeight;
+        // 节点中心 → 视口中心（用的是局部坐标 × scale 的绝对居中，配合相对坐标避免子图漂移）
+        c.ds.offset = [w / 2 - (rel[0] + size[0] / 2) * s,
+                       h / 2 - (rel[1] + size[1] / 2) * s];
+        if (typeof c.setDirty === "function") c.setDirty(true, true);
+        else c.dirty_canvas = true;
+    } catch (e) { console.warn("[MissingDoctor] 定位失败", e); }
+    if (graph && typeof graph.setDirtyCanvas === "function") graph.setDirtyCanvas(true, true);
     // 自动关闭面板，让用户直接看到画布上的高亮节点
     closeDialog();
 }
