@@ -57,9 +57,12 @@ def iter_model_files():
                     if os.path.splitext(f)[1].lower() not in MODEL_EXTS:
                         continue
                     full = os.path.normpath(os.path.join(root, f))
-                    if full in seen:
+                    # Windows 路径大小写不敏感：用 normcase 作为去重键，
+                    # 避免同一物理目录被 LLM/llm 这类大小写别名注册成两个条目而重复计数
+                    key = os.path.normcase(full)
+                    if key in seen:
                         continue
-                    seen.add(full)
+                    seen.add(key)
                     try:
                         st = os.stat(full)
                     except OSError:
