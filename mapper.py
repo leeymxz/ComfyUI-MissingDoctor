@@ -29,8 +29,25 @@ def supported():
 
 
 def is_link(path):
+    """识别目录联接（junction / 符号链接）：
+    os.path.islink 不识别 junction（Python 的 isjunction 版本相关），
+    最终兜底用 realpath 对比——junction 的 realpath 必然指向别处。"""
     try:
-        return bool(os.path.islink(path))
+        if hasattr(os.path, "isjunction") and os.path.isjunction(path):
+            return True
+    except Exception:
+        pass
+    try:
+        if os.path.islink(path):
+            return True
+    except Exception:
+        pass
+    try:
+        if not os.path.isdir(path):
+            return False
+        rp = os.path.normcase(os.path.realpath(path))
+        np = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+        return rp != np
     except Exception:
         return False
 
@@ -104,9 +121,18 @@ def scan_installs():
 
 
 def _mklink_j(target, link):
+    """创建目录联接（Junction）：优先用 Python 内置 _winapi.CreateJunction
+    （无需管理员权限、无 cmd 引号坑）；失败时退回 mklink /J。"""
     try:
+        import _winapi
+        _winapi.CreateJunction(target, link)
+        return True
+    except Exception:
+        pass
+    try:
+        # 兜底：mklink /J（cmd 方式），参数不带引号由 cmd 自行拼接
         r = subprocess.run(
-            ["cmd", "/c", "mklink", "/J", '"%s"' % link, '"%s"' % target],
+            ["cmd", "/c", "mklink", "/J", link, target],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             creationflags=CREATE_NO_WINDOW)
         return r.returncode == 0
