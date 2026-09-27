@@ -415,6 +415,35 @@ async function startNodeInstall(items, hintEl) {
     }, 1000);
 }
 
+// 在画布上定位并高亮指定类型的节点（含幽灵节点徽章处理入口）
+function locateNode(ct, ghost) {
+    const nodes = (window.app && window.app.graph && window.app.graph._nodes || [])
+        .filter(n => n.type === ct);
+    if (!nodes.length) {
+        alert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
+        return;
+    }
+    // 高亮 + 闪烁
+    nodes.forEach(n => {
+        n.selected = true;
+        const old = n.bgcolor;
+        n.bgcolor = "#6e2b0a";
+        setTimeout(() => { n.bgcolor = old; n.selected = false; }, 1800);
+    });
+    // 居中到第一个
+    try {
+        const b = nodes[0].getBounding();
+        const c = window.app.canvas;
+        const s = (c.ds && c.ds.scale) || 1;
+        c.ds.offset = [-b[0] * s + c.canvas.width / 2 - b[2] * s / 2,
+                       -b[1] * s + c.canvas.height / 2 - b[3] * s / 2];
+        c.setDirty(true, true);
+    } catch (e) { /* ignore */ }
+    window.app.graph.setDirtyCanvas(true, true);
+    // 自动关闭面板，让用户直接看到画布上的高亮节点
+    closeDialog();
+}
+
 function renderNodesTab(body) {
     const resultBox = el("div");
     const installBox = el("div");
@@ -540,7 +569,19 @@ function renderNodesTab(body) {
                 ]);
             });
             resultBox.appendChild(el("div", { class: "md-card" }, [
-                el("div", { class: "md-title", text: "❌ " + ct }),
+                el("div", { class: "md-row", style: "margin-bottom:4px;align-items:center" }, [
+                    el("div", { class: "md-title", style: "margin:0" }, [
+                        "❌ " + ct,
+                        !links.length ? el("span", { class: "md-pill bad", style: "margin-left:8px",
+                            title: "未找到任何提供该节点的插件/仓库，疑似幽灵节点", text: "👻 疑似幽灵" }) : null,
+                    ]),
+                ]),
+                el("div", { class: "md-row", style: "margin-bottom:6px" }, [
+                    el("button", { class: "md-btn", text: "📍 在画布上定位",
+                        title: "高亮并居中到该节点（幽灵节点同样可定位检查）",
+                        onclick: () => locateNode(ct) }),
+                    el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "点击后自动跳到画布位置" }),
+                ]),
                 el("div", { class: "md-meta", text: "候选安装来源：" }),
                 ...(links.length ? links : [
                     el("div", { class: "md-card", style: "border-color:#6e5a20;margin-top:6px" }, [
