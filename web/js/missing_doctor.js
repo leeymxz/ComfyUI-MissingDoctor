@@ -208,6 +208,7 @@ function buildDialog() {
             ["models", "📦 缺失模型"],
             ["aged", "🕰 老旧模型"],
             ["dedupe", "♻️ 查重"],
+            ["mapper", "🗺 目录映射"],
             ["cleanup", "🧹 清理"],
             ["env", "🧪 环境"],
         ].map(([id, label]) =>
@@ -294,6 +295,7 @@ function switchTab(id) {
     else if (id === "models") renderModelsTab(body);
     else if (id === "aged") renderAgedTab(body);
     else if (id === "dedupe") renderDedupeTab(body);
+    else if (id === "mapper") renderMapperTab(body);
     else if (id === "cleanup") renderCleanupTab(body);
     else if (id === "env") renderEnvTab(body);
 }
@@ -1638,6 +1640,130 @@ function renderDedupeTab(body) {
     ]));
     body.appendChild(resultBox);
     resultBox.appendChild(el("div", { class: "md-empty", text: "点击「扫描重复模型」开始查重" }));
+}
+
+// ---------------------------------------------------------------- Tab: 目录映射
+
+function renderMapperTab(body) {
+    const box = el("div");
+    const sourceSel = el("select", { class: "md-input", style: "min-width:340px" });
+    const listBox = el("div");
+    let installs = [];
+    let sourcePaths = [];
+
+    function fmtStatus(s) {
+        if (s === "linked") return el("span", { class: "md-pill info", text: "✔ 已映射" });
+        if (s === "real") return el("span", { class: "md-pill ok", text: "● 真实目录" });
+        return el("span", { class: "md-pill bad", text: "— 不存在" });
+    }
+
+    function refreshSourceSel() {
+        sourcePaths = installs.filter(i => i.status === "real").map(i => i.models);
+        if (!sourcePaths.length) sourcePaths = [installs[0] && installs[0].models || ""].filter(Boolean);
+        sourceSel.innerHTML = "";
+        sourcePaths.forEach((p, i) => {
+            sourceSel.appendChild(el("option", { value: p, text: "📦 " + p }));
+        });
+    }
+
+    async function scan() {
+        box.innerHTML = "";
+        box.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "扫描本机 ComfyUI 安装与 models 状态..."]));
+        try {
+            const d = await mdFetch("/md/mapper_scan");
+            installs = d.installs || [];
+            render();
+        } catch (e) {
+            box.innerHTML = "";
+            box.appendChild(el("div", { class: "md-error", text: "扫描失败：" + e.message }));
+        }
+    }
+
+    function checkedTargets() {
+        return [...listBox.querySelectorAll("input.md-check:checked")].map(c => c.dataset.path);
+    }
+
+    function render() {
+        box.innerHTML = "";
+        refreshSourceSel();
+        box.appendChild(el("div", { class: "md-card" }, [
+            el("div", { class: "md-title", text: "🗺 models 目录映射（Junction 共享一份模型库，避免多整合包重复占用几百 GB）" }),
+            el("div", { class: "md-meta", text: "安全：只创建/删除目录联接本身，绝不移动/删除模型文件；目标非空先备份（models_backup_*）；源为链接或自映射会拦截" }),
+        ]));
+        if (!installs.length) {
+            box.appendChild(el("div", { class: "md-empty", text: "未扫描到安装（点击扫描按钮）" }));
+            return;
+        }
+        // 源选择
+        box.appendChild(el("div", { class: "md-row" }, [
+            el("span", { text: "① 模型仓库目录（真实存放，作为映射源）：", style: "font-size:12px;color:#aaa" }),
+            sourceSel,
+        ]));
+        // 目标列表
+        box.appendChild(el("div", { class: "md-card" }, [
+            el("div", { class: "md-title", text: "② 本机 ComfyUI 安装（勾选要映射的目标）" }),
+        ]));
+        listBox.innerHTML = "";
+        for (const it of installs) {
+            listBox.appendChild(el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px" }, [
+                el("input", { class: "md-check", type: "checkbox", "data-path": it.path, checked: it.status === "linked" ? false : (it.status !== "missing") }),
+                el("span", { style: "font-size:12px;color:#ddd;word-break:break-all", text: it.path }),
+                fmtStatus(it.status),
+                it.status === "linked" && it.target
+                    ? el("span", { style: "font-size:11px;color:#8ab4ff", text: "→ 指向 " + it.target })
+                    : null,
+            ]));
+        }
+        box.appendChild(listBox);
+        // 操作按钮
+        box.appendChild(el("div", { class: "md-row" }, [
+            el("button", { class: "md-btn", text: "▶ 开始映射", onclick: async () => {
+                const src = sourceSel.value;
+                const targets = checkedTargets();
+                if (!src || !targets.length) { alert("请先选源目录并勾选目标安装"); return; }
+                const bakInfo = targets.map(t => "· " + t).join("\n");
+                if (!confirm(`确认将以下安装的 models 映射到\n${src}\n？\n\n${bakInfo}\n\n若目标 models 非空会自动改名备份（models_backup_*），模型文件不会被删除。完成后需重启对应 ComfyUI 生效。`)) return;
+                try {
+                    const r = await mdFetch("/md/mapper_apply", { method: "POST",
+                        body: { source: src, targets } });
+                    let msg = "";
+                    (r.results || []).forEach(x => {
+                        msg += "【" + x.target + "】\n" +
+                            (x.ok ? "✓ " + (x.done || []).join("\n") : "✗ " + (x.errors || []).join("\n")) + "\n\n";
+                    });
+                    alert(msg || "无结果");
+                    scan();
+                } catch (e) { alert("失败：" + e.message); }
+            } }),
+            el("button", { class: "md-btn", text: "■ 解除映射", onclick: async () => {
+                const targets = checkedTargets();
+                if (!targets.length) { alert("请勾选要解除的安装（勾选所有项再点也行）"); return; }
+                if (!confirm("解除映射只删除目录联接本身，目标模型文件不受影响。继续？")) return;
+                try {
+                    const r = await mdFetch("/md/mapper_unmap", { method: "POST", body: { targets } });
+                    alert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
+                    scan();
+                } catch (e) { alert("失败：" + e.message); }
+            } }),
+            el("button", { class: "md-btn ghost", text: "↩ 还原备份", onclick: async () => {
+                const targets = checkedTargets();
+                if (!targets.length) { alert("请先勾选要还原的安装"); return; }
+                try {
+                    const r = await mdFetch("/md/mapper_restore", { method: "POST", body: { targets } });
+                    alert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
+                    scan();
+                } catch (e) { alert("失败：" + e.message); }
+            } }),
+            el("button", { class: "md-btn ghost", text: "🔄 重新扫描", onclick: scan }),
+        ]));
+    }
+
+    body.appendChild(el("div", { class: "md-row" }, [
+        el("button", { class: "md-btn", text: "🔍 扫描本机 ComfyUI", onclick: scan }),
+        el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "基于 comfy-models-mapper 思路：多整合包共享一份模型仓库，立省几百 GB" }),
+    ]));
+    body.appendChild(box);
+    scan();
 }
 
 // ---------------------------------------------------------------- Tab4: 清理

@@ -28,6 +28,7 @@ from . import dedupe
 from . import downloader
 from . import envinfo
 from . import installer
+from . import mapper
 from . import pkgmgr
 from . import remote_lookup
 
@@ -369,6 +370,61 @@ async def h_duplicates(request):
         return _err(e)
 
 
+async def h_mapper_scan(request):
+    """扫描本机所有 ComfyUI 安装与 models 映射状态"""
+    try:
+        data = await asyncio.to_thread(mapper.scan_installs)
+        return _json({"status": "ok", "data": {"installs": data,
+                                               "supported": mapper.supported()}})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_mapper_apply(request):
+    """建立 models 目录映射（源真实仓库 → 目标安装）"""
+    try:
+        body = await _body(request)
+        source = body.get("source") or ""
+        targets = body.get("targets") or []
+        if not source or not targets:
+            return _err("缺少 source 或 targets", 400)
+        results = []
+        for t in targets:
+            r = await asyncio.to_thread(mapper.map_models, source, t)
+            results.append({"target": t, **r})
+        return _json({"status": "ok", "data": {"results": results}})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_mapper_unmap(request):
+    try:
+        body = await _body(request)
+        results = []
+        for t in body.get("targets") or []:
+            r = await asyncio.to_thread(mapper.unmap_models, t)
+            results.append({"target": t, **r})
+        return _json({"status": "ok", "data": {"results": results}})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_mapper_restore(request):
+    try:
+        body = await _body(request)
+        results = []
+        for t in body.get("targets") or []:
+            r = await asyncio.to_thread(mapper.restore_backup, t)
+            results.append({"target": t, **r})
+        return _json({"status": "ok", "data": {"results": results}})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
 async def h_version(request):
     try:
         import sys
@@ -438,6 +494,10 @@ ROUTES = [
     ("GET", "/md/version", h_version),
     ("POST", "/md/feedback", h_feedback),
     ("GET", "/md/duplicates", h_duplicates),
+    ("GET", "/md/mapper_scan", h_mapper_scan),
+    ("POST", "/md/mapper_apply", h_mapper_apply),
+    ("POST", "/md/mapper_unmap", h_mapper_unmap),
+    ("POST", "/md/mapper_restore", h_mapper_restore),
 ]
 
 
