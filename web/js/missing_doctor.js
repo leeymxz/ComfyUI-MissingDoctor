@@ -98,6 +98,71 @@ function el(tag, attrs = {}, children = []) {
     return e;
 }
 
+// ---------------- 面板内部对话框（替代浏览器原生 alert/confirm/prompt）----------------
+let MD_POP = null;
+
+function _popDom() {
+    if (!MD_POP) {
+        MD_POP = el("div", { id: "md-pop" });
+        document.body.appendChild(MD_POP);
+    }
+    return MD_POP;
+}
+
+function _popShow(box) {
+    const d = _popDom();
+    d.innerHTML = "";
+    d.style.display = "flex";
+    d.appendChild(box);
+}
+
+function _popHide() {
+    if (MD_POP) MD_POP.style.display = "none";
+}
+
+function mdAlert(message) {
+    return new Promise(resolve => {
+        _popShow(el("div", { class: "md-pop-box" }, [
+            el("div", { class: "md-pop-title", text: "ℹ️ 提示" }),
+            el("div", { class: "md-pop-msg", text: String(message) }),
+            el("div", { class: "md-pop-btns" }, [
+                el("button", { class: "md-btn", text: "确定", onclick: () => { _popHide(); resolve(); } }),
+            ]),
+        ]));
+    });
+}
+
+function mdConfirm(message) {
+    return new Promise(resolve => {
+        _popShow(el("div", { class: "md-pop-box" }, [
+            el("div", { class: "md-pop-title", text: "❓ 确认操作" }),
+            el("div", { class: "md-pop-msg", text: String(message) }),
+            el("div", { class: "md-pop-btns" }, [
+                el("button", { class: "md-btn ghost", text: "取消", onclick: () => { _popHide(); resolve(false); } }),
+                el("button", { class: "md-btn", text: "确定", onclick: () => { _popHide(); resolve(true); } }),
+            ]),
+        ]));
+    });
+}
+
+function mdPrompt(message, def) {
+    return new Promise(resolve => {
+        const input = el("input", { class: "md-input md-pop-input", value: def != null ? String(def) : "" });
+        const ok = () => { _popHide(); resolve(input.value.trim() || null); };
+        input.addEventListener("keydown", e => { if (e.key === "Enter") ok(); });
+        _popShow(el("div", { class: "md-pop-box" }, [
+            el("div", { class: "md-pop-title", text: "✍️ 请输入" }),
+            el("div", { class: "md-pop-msg", text: String(message) }),
+            input,
+            el("div", { class: "md-pop-btns" }, [
+                el("button", { class: "md-btn ghost", text: "取消", onclick: () => { _popHide(); resolve(null); } }),
+                el("button", { class: "md-btn", text: "确定", onclick: ok }),
+            ]),
+        ]));
+        setTimeout(() => input.focus(), 50);
+    });
+}
+
 async function mdFetch(path, options = {}) {
     const opt = { method: "GET", headers: {}, ...options };
     if (opt.body && typeof opt.body !== "string") {
@@ -193,6 +258,16 @@ function injectStyle() {
   transition: opacity .15s; }
 #md-float-ball:hover .md-ball-tip { opacity: 1; }
 .md-check { width: 15px; height: 15px; accent-color: #4a6fa5; cursor: pointer; }
+#md-pop { position: fixed; inset: 0; z-index: 2147483001; display: none;
+  align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+.md-pop-box { min-width: 320px; max-width: 660px; width: fit-content; background: #222;
+  border: 1px solid #4a6fa5; border-radius: 12px; padding: 16px 18px; color: #eee;
+  box-shadow: 0 12px 40px rgba(0,0,0,.55); font-family: sans-serif; }
+.md-pop-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+.md-pop-msg { font-size: 12px; color: #ccc; white-space: pre-wrap; margin-bottom: 12px;
+  max-height: 42vh; overflow-y: auto; line-height: 1.7; }
+.md-pop-btns { display: flex; gap: 10px; justify-content: flex-end; }
+.md-pop-input { width: 100%; box-sizing: border-box; margin-bottom: 12px; }
 ` });
     document.head.appendChild(style);
 }
@@ -391,7 +466,7 @@ async function startNodeInstall(items, hintEl) {
                                 await mdFetch("/md/pip_install", { method: "POST",
                                     body: { requirements_file: j.target + "/requirements.txt" } });
                                 watchPip();
-                            } catch (e) { alert("安装失败：" + e.message); }
+                            } catch (e) { mdAlert("安装失败：" + e.message); }
                         } }));
                 }
                 list.appendChild(el("div", { style: "font-size:12px;margin-bottom:3px" }, kids));
@@ -424,7 +499,7 @@ function locateNode(ct, ghost) {
     const graph = window.app && window.app.graph;
     const nodes = (graph && graph._nodes || []).filter(n => n.type === ct);
     if (!nodes.length) {
-        alert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
+        mdAlert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
         return;
     }
     // 高亮 + 闪烁
@@ -526,10 +601,10 @@ function renderNodesTab(body) {
             resultBox.appendChild(el("div", { class: "md-row" }, [
                 el("button", { class: "md-btn", text: `⚡ 一键安装全部缺失节点（${batch.length} 个）`, title:
                     "用 git clone 自动安装到 custom_nodes，完成后需重启 ComfyUI 生效", onclick: async () => {
-                    if (!confirm(`确认用 git clone 自动安装 ${batch.length} 个节点包到 custom_nodes 吗？\n\n${batch.map(b => "· " + b.title).join("\n")}\n\n安装完成后需要重启 ComfyUI 生效。`)) return;
+                    if (!(await mdConfirm(`确认用 git clone 自动安装 ${batch.length} 个节点包到 custom_nodes 吗？\n\n${batch.map(b => "· " + b.title).join("\n")}\n\n安装完成后需要重启 ComfyUI 生效。`))) return;
                     try {
                         await startNodeInstall(batch, installBox);
-                    } catch (e) { alert("安装启动失败：" + e.message); }
+                    } catch (e) { mdAlert("安装启动失败：" + e.message); }
                 } }),
                 el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "git clone 浅克隆，自动跳过已安装的" }),
             ]));
@@ -558,10 +633,10 @@ function renderNodesTab(body) {
                     badge,
                     el("button", { class: "md-btn", text: "⚡ 自动安装", title: "git clone 到 custom_nodes，重启 ComfyUI 后生效",
                         onclick: async (ev) => {
-                            if (!confirm(`确认安装 ${s.title || repo} 到 custom_nodes 吗？\n安装完成后需要重启 ComfyUI 生效。`)) return;
+                            if (!(await mdConfirm(`确认安装 ${s.title || repo} 到 custom_nodes 吗？\n安装完成后需要重启 ComfyUI 生效。`))) return;
                             try {
                                 await startNodeInstall([{ url: repo, title: ct }], installBox);
-                            } catch (e) { alert("安装启动失败：" + e.message); }
+                            } catch (e) { mdAlert("安装启动失败：" + e.message); }
                         } }),
                     el("button", { class: "md-btn ghost", text: "复制 clone 命令", onclick: (ev) => {
                         navigator.clipboard.writeText(`git clone "${repo}"`).then(() => {
@@ -571,7 +646,7 @@ function renderNodesTab(body) {
                     } }),
                     el("button", { class: "md-btn ghost", text: "🚩 不对", title: "该候选不是提供此节点的仓库，标记后以后不再推荐",
                         onclick: async (ev) => {
-                            const correct = prompt("如果知道正确的仓库地址请填写（不知道可直接确定）：", "");
+                            const correct = await mdPrompt("如果知道正确的仓库地址请填写（不知道可直接确定）：", "");
                             if (correct === null) return;
                             try {
                                 await mdFetch("/md/feedback", { method: "POST",
@@ -579,7 +654,7 @@ function renderNodesTab(body) {
                                 ev.target.textContent = "已反馈 ✓";
                                 ev.target.disabled = true;
                                 setTimeout(() => (ev.target.textContent = "🚩 不对"), 2000);
-                            } catch (e) { alert("反馈失败：" + e.message); }
+                            } catch (e) { mdAlert("反馈失败：" + e.message); }
                         } }),
                 ]);
             });
@@ -709,7 +784,7 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
         let dest = null, folderName = "";
         if (customCheck.checked) {
             dest = customInput.value.trim();
-            if (!dest) { alert("请输入自定义路径"); return; }
+            if (!dest) { mdAlert("请输入自定义路径"); return; }
             folderName = dest.split("\\").pop() || dest;
         } else {
             const o = options[parseInt(sel.value, 10)] || options[0];
@@ -719,7 +794,7 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
         try {
             const start = await mdFetch("/md/download_start", {
                 method: "POST", body: { url, filename, folder_type: folderName, dest_dir: dest } });
-            if (!start.ok) { alert("下载启动失败：" + (start.error || "未知错误")); return; }
+            if (!start.ok) { mdAlert("下载启动失败：" + (start.error || "未知错误")); return; }
             picker.remove();
             // 轮询进度
             const timer = setInterval(async () => {
@@ -751,7 +826,7 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
                 }
                 if (!s.running && s.done) clearInterval(timer);
             }, 1000);
-        } catch (e) { alert("下载启动失败：" + e.message); }
+        } catch (e) { mdAlert("下载启动失败：" + e.message); }
     } });
 
     picker.appendChild(el("div", { class: "md-row", style: "align-items:flex-start" }, [
@@ -838,7 +913,7 @@ function renderModelsTab(body) {
 
     async function doSearch() {
         const q = searchInput.value.trim();
-        if (!q) { alert("请输入要搜索的模型名或关键词"); return; }
+        if (!q) { mdAlert("请输入要搜索的模型名或关键词"); return; }
         searchResult.innerHTML = "";
         searchResult.appendChild(el("div", { class: "md-empty" },
             [el("span", { class: "md-spin" }), "正在搜索 " + q + " ..."]));
@@ -956,7 +1031,7 @@ function renderModelsTab(body) {
                     } }) : null,
                     el("button", { class: "md-btn ghost", text: "🚩 不对", title: "该候选不是这个模型/链接不可用，标记后以后不再推荐",
                         onclick: async (ev) => {
-                            const correct = prompt("如果知道正确的下载地址请填写（不知道可直接确定）：", "");
+                            const correct = await mdPrompt("如果知道正确的下载地址请填写（不知道可直接确定）：", "");
                             if (correct === null) return;
                             try {
                                 await mdFetch("/md/feedback", { method: "POST",
@@ -964,7 +1039,7 @@ function renderModelsTab(body) {
                                 ev.target.textContent = "已反馈 ✓";
                                 ev.target.disabled = true;
                                 setTimeout(() => (ev.target.textContent = "🚩 不对"), 2000);
-                            } catch (e) { alert("反馈失败：" + e.message); }
+                            } catch (e) { mdAlert("反馈失败：" + e.message); }
                         } }),
                 ]);
                 return row;
@@ -1110,26 +1185,26 @@ function renderAgedTab(body) {
         resultBox.appendChild(el("div", { class: "md-row" }, [
             el("button", { class: "md-btn danger", text: "🗑 删除选中（移入回收站）", onclick: async () => {
                 const paths = selectedPaths();
-                if (!paths.length) { alert("请先勾选要删除的模型文件"); return; }
+                if (!paths.length) { mdAlert("请先勾选要删除的模型文件"); return; }
                 // 防误删：优先警告近期有真实调用记录的文件
                 const recent = data.items.filter(i => paths.includes(i.path) &&
                     i.last_used && (Date.now() / 1000 - i.last_used) < RECENT * 86400);
                 if (recent.length) {
                     const preview = recent.slice(0, 8).map(i => "· " + i.rel_path).join("\n");
-                    if (!confirm(`⚠️ 防误删提醒\n\n选中的文件里有 ${recent.length} 个在近 ${RECENT} 天内被调用过：\n${preview}${recent.length > 8 ? "\n..." : ""}\n\n这些模型可能仍在使用中，确定仍要删除吗？`)) return;
+                    if (!(await mdConfirm(`⚠️ 防误删提醒\n\n选中的文件里有 ${recent.length} 个在近 ${RECENT} 天内被调用过：\n${preview}${recent.length > 8 ? "\n..." : ""}\n\n这些模型可能仍在使用中，确定仍要删除吗？`))) return;
                 }
-                if (!confirm(`确认删除选中的 ${paths.length} 个文件吗？\n将移入回收站（已安装 send2trash），释放约 ${fmtBytes(
+                if (!(await mdConfirm(`确认删除选中的 ${paths.length} 个文件吗？\n将移入回收站（已安装 send2trash），释放约 ${fmtBytes(
                     MD.agedData.items.filter(i => paths.includes(i.path)).reduce((s, i) => s + i.size, 0)
-                )}`)) return;
+                )}`))) return;
                 try {
                     const r = await mdFetch("/md/cleanup", { method: "POST",
                         body: { category: "models", paths, confirm: true } });
                     let msg = `已删除 ${r.deleted_count} 个文件，释放 ${fmtBytes(r.freed)}`;
                     if (!r.trash_used) msg += "（直接删除，未使用回收站）";
                     if (r.errors && r.errors.length) msg += `\n失败 ${r.errors.length} 个：\n` + r.errors.map(e => e.path + ": " + e.error).join("\n");
-                    alert(msg);
+                    mdAlert(msg);
                     scan();
-                } catch (e) { alert("删除失败：" + e.message); }
+                } catch (e) { mdAlert("删除失败：" + e.message); }
             } }),
         ]));
 
@@ -1297,11 +1372,11 @@ function renderEnvTab(body) {
                 if (missingPkgs.length) {
                     reqBox.appendChild(el("div", { class: "md-row" }, [
                         el("button", { class: "md-btn", text: `⬇ 一键安装缺失依赖（${missingPkgs.length} 个包）`, onclick: async () => {
-                            if (!confirm(`确认用 pip 安装以下依赖吗？\n\n${missingPkgs.join("、")}\n\n将安装到 ComfyUI 的 Python 环境。`)) return;
+                            if (!(await mdConfirm(`确认用 pip 安装以下依赖吗？\n\n${missingPkgs.join("、")}\n\n将安装到 ComfyUI 的 Python 环境。`))) return;
                             try {
                                 await mdFetch("/md/pip_install", { method: "POST", body: { packages: missingPkgs } });
                                 watchPip(() => loadReq(true));
-                            } catch (e) { alert("安装失败：" + e.message); }
+                            } catch (e) { mdAlert("安装失败：" + e.message); }
                         } }),
                         el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "git/直链类依赖在下方单独安装" }),
                     ]));
@@ -1315,11 +1390,11 @@ function renderEnvTab(body) {
                             el("td", { class: "wrap", text: i.requirement, title: i.requirement }),
                             el("td", {}, el("div", { style: "display:flex;gap:6px;align-items:center" }, [
                                 el("button", { class: "md-btn", text: "⬇ 单独安装", title: "URL/git 依赖单独执行 pip，失败不影响其他包", onclick: async () => {
-                                    if (!confirm(`单独安装 ${i.requirement} 吗？\n（git 依赖需要本机 git 可用，安装耗时视仓库而定）`)) return;
+                                    if (!(await mdConfirm(`单独安装 ${i.requirement} 吗？\n（git 依赖需要本机 git 可用，安装耗时视仓库而定）`))) return;
                                     try {
                                         await mdFetch("/md/pip_install", { method: "POST", body: { packages: [i.requirement] } });
                                         watchPip(() => loadReq(true));
-                                    } catch (e) { alert("安装失败：" + e.message); }
+                                    } catch (e) { mdAlert("安装失败：" + e.message); }
                                 } }),
                             ])),
                         ]));
@@ -1373,9 +1448,9 @@ function renderEnvTab(body) {
             } }),
             el("button", { class: "md-btn danger", text: "🗑 卸载选中", onclick: async () => {
                 const names = [...heavyBox.querySelectorAll("input.md-check:checked")].map(c => c.dataset.name);
-                if (!names.length) { alert("请先勾选要卸载的包"); return; }
+                if (!names.length) { mdAlert("请先勾选要卸载的包"); return; }
                 const total = names.reduce((s, n) => s + ((MD.heavyItems || []).find(p => p.name === n) || {}).size, 0);
-                if (!confirm(`确认卸选中的 ${names.length} 个包吗？\n\n${names.join("、")}\n\n一次性 pip uninstall，完成后列表即时更新。`)) return;
+                if (!(await mdConfirm(`确认卸选中的 ${names.length} 个包吗？\n\n${names.join("、")}\n\n一次性 pip uninstall，完成后列表即时更新。`))) return;
                 try {
                     await mdFetch("/md/pip_uninstall", { method: "POST", body: { packages: names } });
                     watchPip(() => {
@@ -1386,7 +1461,7 @@ function renderEnvTab(body) {
                             el("div", { class: "md-meta", text: "列表已按卸载结果即时更新；如需精确的剩余占用统计，请点「🔄 重新统计」" }),
                         ]));
                     });
-                } catch (e) { alert("卸载失败：" + e.message); }
+                } catch (e) { mdAlert("卸载失败：" + e.message); }
             } }),
         ]));
         if (!items.length) {
@@ -1398,7 +1473,7 @@ function renderEnvTab(body) {
             const unBtn = p.core
                 ? el("span", { class: "md-pill ok", style: "opacity:.75", title: "ComfyUI 核心依赖，卸载会导致无法启动", text: "核心·禁卸" })
                 : el("button", { class: "md-btn danger", text: "卸载", onclick: async () => {
-                    if (!confirm(`确认卸载 ${p.name} ${p.version}（${p.size_str}）吗？\n\n卸载后如插件报 ImportError，重新 pip install 即可恢复。`)) return;
+                    if (!(await mdConfirm(`确认卸载 ${p.name} ${p.version}（${p.size_str}）吗？\n\n卸载后如插件报 ImportError，重新 pip install 即可恢复。`))) return;
                     try {
                         await mdFetch("/md/pip_uninstall", { method: "POST", body: { packages: [p.name] } });
                         watchPip(() => {
@@ -1408,7 +1483,7 @@ function renderEnvTab(body) {
                                 el("div", { class: "md-meta", text: "列表已即时更新；如需精确统计请点「🔄 重新统计」" }),
                             ]));
                         });
-                    } catch (e) { alert("卸载失败：" + e.message); }
+                    } catch (e) { mdAlert("卸载失败：" + e.message); }
                 } });
             tbody.appendChild(el("tr", {}, [
                 el("td", { style: "width:30px" }, p.core ? null :
@@ -1581,14 +1656,14 @@ function renderDedupeTab(body) {
                 const paths = [];
                 d.groups.forEach(g => g.files.forEach(f => { if (f.path !== g.keep) paths.push(f.path); }));
                 if (!paths.length) return;
-                if (!confirm(`确认删除全部 ${paths.length} 个重复文件（约 ${fmtBytes(d.waste_total)}）吗？\n每组保留一个（优先最近调用的）。删除进入回收站，可恢复。`)) return;
+                if (!(await mdConfirm(`确认删除全部 ${paths.length} 个重复文件（约 ${fmtBytes(d.waste_total)}）吗？\n每组保留一个（优先最近调用的）。删除进入回收站，可恢复。`))) return;
                 try {
                     const r = await mdFetch("/md/cleanup", { method: "POST",
                         body: { category: "models", paths, confirm: true } });
-                    alert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}` +
+                    mdAlert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}` +
                           (r.errors && r.errors.length ? "，失败 " + r.errors.length + " 个" : ""));
                     scan();
-                } catch (e) { alert("清理失败：" + e.message); }
+                } catch (e) { mdAlert("清理失败：" + e.message); }
             } }),
         ]));
 
@@ -1619,14 +1694,14 @@ function renderDedupeTab(body) {
             card.appendChild(el("div", { class: "md-row", style: "margin-top:6px" }, [
                 el("button", { class: "md-btn", text: "🗑 删除勾选的重复副本", onclick: async () => {
                     const paths = [...checkedPaths(g)];
-                    if (!paths.length) { alert("本组所有副本都已被勾掉（或没有可选副本）"); return; }
-                    if (!confirm(`删除本组 ${paths.length} 个重复文件（约 ${fmtBytes(paths.length * g.size)}）？删除进入回收站。`)) return;
+                    if (!paths.length) { mdAlert("本组所有副本都已被勾掉（或没有可选副本）"); return; }
+                    if (!(await mdConfirm(`删除本组 ${paths.length} 个重复文件（约 ${fmtBytes(paths.length * g.size)}）？删除进入回收站。`))) return;
                     try {
                         const r = await mdFetch("/md/cleanup", { method: "POST",
                             body: { category: "models", paths, confirm: true } });
-                        alert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}`);
+                        mdAlert(`已删除 ${r.deleted_count} 个，释放 ${fmtBytes(r.freed)}`);
                         scan();
-                    } catch (e) { alert("清理失败：" + e.message); }
+                    } catch (e) { mdAlert("清理失败：" + e.message); }
                 } }),
             ]));
             resultBox.appendChild(card);
@@ -1720,9 +1795,9 @@ function renderMapperTab(body) {
             el("button", { class: "md-btn", text: "▶ 开始映射", onclick: async () => {
                 const src = sourceSel.value;
                 const targets = checkedTargets();
-                if (!src || !targets.length) { alert("请先选源目录并勾选目标安装"); return; }
+                if (!src || !targets.length) { mdAlert("请先选源目录并勾选目标安装"); return; }
                 const bakInfo = targets.map(t => "· " + t).join("\n");
-                if (!confirm(`确认将以下安装的 models 映射到\n${src}\n？\n\n${bakInfo}\n\n若目标 models 非空会自动改名备份（models_backup_*），模型文件不会被删除。完成后需重启对应 ComfyUI 生效。`)) return;
+                if (!(await mdConfirm(`确认将以下安装的 models 映射到\n${src}\n？\n\n${bakInfo}\n\n若目标 models 非空会自动改名备份（models_backup_*），模型文件不会被删除。完成后需重启对应 ComfyUI 生效。`))) return;
                 try {
                     const r = await mdFetch("/md/mapper_apply", { method: "POST",
                         body: { source: src, targets } });
@@ -1731,28 +1806,28 @@ function renderMapperTab(body) {
                         msg += "【" + x.target + "】\n" +
                             (x.ok ? "✓ " + (x.done || []).join("\n") : "✗ " + (x.errors || []).join("\n")) + "\n\n";
                     });
-                    alert(msg || "无结果");
+                    mdAlert(msg || "无结果");
                     scan();
-                } catch (e) { alert("失败：" + e.message); }
+                } catch (e) { mdAlert("失败：" + e.message); }
             } }),
             el("button", { class: "md-btn", text: "■ 解除映射", onclick: async () => {
                 const targets = checkedTargets();
-                if (!targets.length) { alert("请勾选要解除的安装（勾选所有项再点也行）"); return; }
-                if (!confirm("解除映射只删除目录联接本身，目标模型文件不受影响。继续？")) return;
+                if (!targets.length) { mdAlert("请勾选要解除的安装（勾选所有项再点也行）"); return; }
+                if (!(await mdConfirm("解除映射只删除目录联接本身，目标模型文件不受影响。继续？"))) return;
                 try {
                     const r = await mdFetch("/md/mapper_unmap", { method: "POST", body: { targets } });
-                    alert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
+                    mdAlert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
                     scan();
-                } catch (e) { alert("失败：" + e.message); }
+                } catch (e) { mdAlert("失败：" + e.message); }
             } }),
             el("button", { class: "md-btn ghost", text: "↩ 还原备份", onclick: async () => {
                 const targets = checkedTargets();
-                if (!targets.length) { alert("请先勾选要还原的安装"); return; }
+                if (!targets.length) { mdAlert("请先勾选要还原的安装"); return; }
                 try {
                     const r = await mdFetch("/md/mapper_restore", { method: "POST", body: { targets } });
-                    alert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
+                    mdAlert((r.results || []).map(x => "【" + x.target + "】" + (x.ok ? "✓ " + (x.done || []).join("") : "✗ " + (x.errors || []).join(""))).join("\n"));
                     scan();
-                } catch (e) { alert("失败：" + e.message); }
+                } catch (e) { mdAlert("失败：" + e.message); }
             } }),
             el("button", { class: "md-btn ghost", text: "🔄 重新扫描", onclick: scan }),
         ]));
@@ -1826,14 +1901,14 @@ function renderCleanupTab(body) {
                             const scope = cat === "output" && MD.outputDays > 0
                                 ? `\n（仅清理 ${MD.outputDays} 天前的输出，最近的新图会保留）` : "";
                             const extra = cat === "output" && !MD.outputDays ? "\n⚠️ 这将删除 output 目录下的全部输出文件！" : "";
-                            if (!confirm(`确认清理「${info.label}」吗？共 ${d.count} 项，约 ${fmtBytes(d.size)}。${scope}${extra}`)) return;
+                            if (!(await mdConfirm(`确认清理「${info.label}」吗？共 ${d.count} 项，约 ${fmtBytes(d.size)}。${scope}${extra}`))) return;
                             try {
                                 const r = await mdFetch("/md/cleanup", { method: "POST",
                                     body: { category: cat, confirm: true, keep_days: cat === "output" ? (MD.outputDays || 0) : 0 } });
-                                alert(`已清理 ${r.deleted_count} 项，释放 ${fmtBytes(r.freed)}` +
+                                mdAlert(`已清理 ${r.deleted_count} 项，释放 ${fmtBytes(r.freed)}` +
                                       (r.errors && r.errors.length ? `\n失败 ${r.errors.length} 项` : ""));
                                 load();
-                            } catch (e) { alert("清理失败：" + e.message); }
+                            } catch (e) { mdAlert("清理失败：" + e.message); }
                         } })) : null,
             ]));
         }
