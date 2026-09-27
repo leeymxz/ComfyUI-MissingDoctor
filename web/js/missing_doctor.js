@@ -542,7 +542,18 @@ function renderNodesTab(body) {
             resultBox.appendChild(el("div", { class: "md-card" }, [
                 el("div", { class: "md-title", text: "❌ " + ct }),
                 el("div", { class: "md-meta", text: "候选安装来源：" }),
-                ...(links.length ? links : [el("div", { class: "md-meta", text: "未在 ComfyUI-Manager 数据库中找到，可在 ComfyUI Manager 的 Install via Git URL 中搜索该节点名" })]),
+                ...(links.length ? links : [
+                    el("div", { class: "md-card", style: "border-color:#6e5a20;margin-top:6px" }, [
+                        el("div", { class: "md-title", style: "color:#ffd54a",
+                            text: "👻 疑似幽灵节点" }),
+                        el("div", { class: "md-meta", style: "color:#ccc",
+                            text: "在 ComfyUI-Manager 数据库与 GitHub 的多次搜索中都没有找到任何提供该节点的插件或仓库。这类节点通常是：" }),
+                        el("div", { style: "font-size:12px;color:#aaa;line-height:1.8;margin-top:4px",
+                            text: "· AI 生成 / 仿写工作流时编造的节点名\n· 原作者使用了自己未发布的私有插件\n· 旧版插件中已被改名或删除的节点" }),
+                        el("div", { style: "font-size:12px;color:#eee;line-height:1.8;margin-top:6px",
+                            text: "处理建议：① 查看该节点在画布上连接了什么，删除后用基础节点或真实等效节点替代；② 向工作流作者确认所需插件；③ 若坚信存在，可在 ComfyUI 双击空白处搜索节点名，仍找不到即为幽灵节点。" }),
+                    ]),
+                ]),
             ]));
         }
     }
