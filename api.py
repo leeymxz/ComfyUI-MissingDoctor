@@ -64,9 +64,16 @@ async def h_check_nodes(request):
                 return ct, await asyncio.to_thread(remote_lookup.suggest_node_sources, ct)
 
             gathered = await asyncio.gather(*[_one(ct) for ct in missing])
-            data["suggestions"] = dict(gathered)
+            suggestions, advices = {}, {}
+            for ct, (sug, adv) in gathered:
+                suggestions[ct] = sug
+                if adv:
+                    advices[ct] = adv
+            data["suggestions"] = suggestions
+            data["node_advice"] = advices
         else:
             data["suggestions"] = {}
+            data["node_advice"] = {}
         return _json({"status": "ok", "data": data})
     except Exception as e:
         traceback.print_exc()

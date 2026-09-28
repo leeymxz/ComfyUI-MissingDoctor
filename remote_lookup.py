@@ -56,6 +56,10 @@ CIVITAI_TYPE_MAP = {
     "text_encoders": "Checkpoint",
 }
 
+# 魔搭（ModelScope）搜索接口：PUT /api/v1/dolphin/agg，无需登录/无需 cookie，
+# body 传 {"Query": 关键词, "Target": ""}，返回全站 19 类聚合结果（模型在 Data.Data.Model）。
+MODELSCOPE_SEARCH_URL = "https://modelscope.cn/api/v1/dolphin/agg"
+
 
 # ---------------------------------------------------------------- 基础 HTTP
 
@@ -80,6 +84,29 @@ def _http_get_json(url, retries=1):
                     time.sleep(2)
                     continue
                 raise
+        except Exception as e:
+            last_err = e
+    raise last_err if last_err else RuntimeError("请求失败")
+
+
+def _http_put_json(url, body, retries=1):
+    """PUT JSON（魔搭搜索接口用），失败自动重试一次"""
+    last_err = None
+    payload = json.dumps(body).encode("utf-8")
+    for attempt in range(retries + 1):
+        try:
+            if _HAS_REQUESTS:
+                r = requests.put(url, data=payload, timeout=HTTP_TIMEOUT,
+                                 headers={**_UA, "Content-Type": "application/json"})
+                if r.status_code in (429, 503) and attempt < retries:
+                    time.sleep(2)
+                    continue
+                r.raise_for_status()
+                return r.json()
+            req = urllib.request.Request(url, data=payload, method="PUT",
+                                         headers={**_UA, "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             last_err = e
     raise last_err if last_err else RuntimeError("请求失败")
@@ -229,6 +256,55 @@ def find_repo_for_node(class_type):
     return out[:5]
 
 
+def search_comfyicu(node_name):
+    """comfy.icu 目录站精确查询：按节点类名找 GitHub 仓库。
+
+    comfy.icu 是 ComfyUI 节点生态目录站，按节点类名精确收录（SSR 渲染）。
+    很多新热节点还没进 ComfyUI-Manager 数据库，但 comfy.icu 已收录，
+    用它可补上 Manager 数据库的滞后空白。
+    页面 URL 稳定：https://comfy.icu/node/{节点名}，抓 HTML 提取 git clone 仓库。
+    返回 [{"repo", "title", "match": "comfyicu"}] 或 []。结果缓存 24h。
+    """
+    try:
+        cache_key = "icu_%s" % re.sub(r"[^a-zA-Z0-9_-]", "_", str(node_name).lower())[:100]
+        cached = _load_cache(cache_key, 24 * 3600)
+        if cached is not None:
+            return cached
+    except Exception:
+        cache_key = None
+
+    result = []
+    try:
+        url = "https://comfy.icu/node/" + quote(str(node_name))
+        if _HAS_REQUESTS:
+            r = requests.get(url, timeout=HTTP_TIMEOUT, headers=_UA)
+            if r.status_code == 200:
+                html = r.text or ""
+            else:
+                html = ""
+        else:
+            req = urllib.request.Request(url, headers=_UA)
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                html = resp.read().decode("utf-8", "replace")
+        if html:
+            # 优先取 git clone 指令（最明确的仓库地址），其次任意 github 链接
+            m = re.search(r"git clone\s+https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
+            if not m:
+                m = re.search(r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
+            if m:
+                repo = "https://github.com/" + m.group(1)
+                result = [{"repo": repo, "title": m.group(1), "match": "comfyicu"}]
+    except Exception:
+        result = []
+
+    try:
+        if cache_key is not None:
+            _save_cache(cache_key, result)
+    except Exception:
+        pass
+    return result
+
+
 def search_github_repos(query, limit=3):
     """GitHub 仓库搜索（无 token，限流 60 次/小时，仅兜底）"""
     try:
@@ -253,10 +329,17 @@ def _camel_words(s):
 
 def _repo_code_verify(repo_url, node_name):
     """代码级验证：用 jsDelivr 文件树找到仓库 .py 源文件，
-    抓取内容检查是否定义了该节点（NODE_CLASS_MAPPINGS["xxx"] / class xxx）。
-    返回 True(代码中确认) / False(代码中无) / None(无法验证)。结果缓存 24h。"""
+    抓取内容检查是否定义了该节点（NODE_CLASS_MAPPINGS["xxx"] / class xxx / @register_node）。
+    返回 True(代码中确认) / False(代码中无) / None(无法验证)。结果缓存 24h。
+
+    精确匹配规则（避免 README/注释提到节点名就误报）：
+      - NODE_CLASS_MAPPINGS["NodeName"] / NODE_CLASS_MAPPINGS.update({...})
+      - NODE_CLASS_MAPPINGS = {... "NodeName": ...}
+      - class NodeName(...) 定义
+      - @register_node("NodeName", ...) 新版注册装饰器
+    """
     try:
-        cache_key = "codev_%s_%s" % (
+        cache_key = "codev2_%s_%s" % (
             re.sub(r"[^a-zA-Z0-9_-]", "_", repo_url),
             re.sub(r"[^a-zA-Z0-9_-]", "_", str(node_name).lower()))[:160]
         cached = _load_cache(cache_key, 24 * 3600)
@@ -267,12 +350,17 @@ def _repo_code_verify(repo_url, node_name):
 
     result = None
     try:
-        import urllib.parse as _up  # noqa
         m = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url or "")
         if not m:
             return None
         owner, repo = m.group(1), m.group(2)
         target = node_name.lower()
+        # 精确匹配模式：节点名作为字典键 / 类名 / 注册装饰器参数
+        # 兼容 f-string 键（f"NodeName": ...）与普通字符串键（"NodeName": / 'NodeName':）
+        pat_key = re.compile(r'(?:f)?["\']%s["\']\s*:' % re.escape(target), re.I)
+        pat_class = re.compile(r"class\s+%s\s*(?:\(|:)" % re.escape(target), re.I)
+        pat_register = re.compile(r'@\s*register_node\s*\(\s*["\']%s["\']' % re.escape(target), re.I)
+
         for branch in ("main", "master"):
             try:
                 tree_url = ("https://data.jsdelivr.com/v1/packages/gh/%s/%s@%s"
@@ -283,12 +371,17 @@ def _repo_code_verify(repo_url, node_name):
             py_files = []
 
             def walk(node, prefix):
+                # 兼容 jsDelivr 树 API：顶层 type="gh"（name 是 owner/repo，代表仓库根，不拼入路径）
                 if not isinstance(node, dict):
                     return
-                if node.get("type") == "directory":
+                ntype = node.get("type")
+                if ntype == "gh":
+                    for c in node.get("files") or []:
+                        walk(c, prefix)
+                elif ntype == "directory":
                     for c in node.get("files") or []:
                         walk(c, prefix + node.get("name", "") + "/")
-                elif node.get("type") == "file":
+                elif ntype == "file":
                     name = node.get("name", "")
                     if name.endswith(".py"):
                         py_files.append(prefix + name)
@@ -296,26 +389,40 @@ def _repo_code_verify(repo_url, node_name):
             if not py_files:
                 continue
 
+            # 排序：仓库根 __init__.py / 含节点名文件 最优先（节点通常注册在入口文件），
+            # 其余按"路径短优先"（越靠近根越可能是入口）；再多抓几个（前 10）
             ranked = sorted(py_files,
-                            key=lambda p: (target.replace(" ", "") in p.lower(), not p.endswith("/__init__.py")),
+                            key=lambda p: (
+                                # 1) 仓库根 __init__.py（最常见的注册入口）
+                                1 if p == "__init__.py" else 0,
+                                # 2) 文件名含节点名
+                                target.replace(" ", "") in p.lower(),
+                                # 3) 任意 __init__.py
+                                p.endswith("/__init__.py"),
+                                # 4) 路径短优先（靠近根）
+                                -len(p.split("/")),
+                            ),
                             reverse=True)
-            for p in ranked[:4]:
+            scanned = 0
+            for p in ranked[:10]:
                 try:
                     content = _http_get_text("https://cdn.jsdelivr.net/gh/%s/%s@%s/%s"
-                                             % (owner, repo, branch, p), max_bytes=128 * 1024)
-                    low = content.lower()
-                    if ('"%s"' % target in low) or ("'%s'" % target in low):
-                        result = True
-                        break
-                    if ("class %s(" % target) in low:
-                        result = True
-                        break
+                                             % (owner, repo, branch, p), max_bytes=256 * 1024)
                 except Exception:
                     continue
+                scanned += 1
+                low = content.lower()
+                if pat_key.search(content) or pat_class.search(low) or pat_register.search(low):
+                    result = True
+                    break
             if result is not None:
                 break
-            if py_files:
-                result = False  # 树与文件都拿到了但代码里没有 → 明确未找到
+            if scanned >= 5:
+                # 抓了足够多的文件都没找到 → 明确未找到
+                result = False
+                break
+            if py_files and scanned == len(ranked):
+                result = False
                 break
     except Exception:
         result = None
@@ -329,17 +436,39 @@ def _repo_code_verify(repo_url, node_name):
 
 
 def _http_get_text(url, max_bytes=131072):
-    """抓取文本内容（限长），供代码验证用"""
-    if _HAS_REQUESTS:
-        r = requests.get(url, timeout=8, headers=_UA)
-        if r.status_code == 200:
-            txt = r.text
-            return txt[:max_bytes] if txt else ""
-        return ""
-    req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        data = resp.read(max_bytes)
-        return data.decode("utf-8", "replace")
+    """抓取文本内容（限长），供代码验证用。
+    jsDelivr CDN 在部分网络环境会被限流，故多通道兜底：
+    raw.githubusercontent.com → ghproxy.net / gh-proxy.com 国内镜像。"""
+    candidates = [url]
+    if "cdn.jsdelivr.net" in url:
+        # 原 URL 形如 https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/{path}
+        m = re.match(r"https://cdn\.jsdelivr\.net/gh/([^@]+)@([^/]+)/(.*)", url)
+        if m:
+            raw = "https://raw.githubusercontent.com/%s/%s/%s" % (m.group(1), m.group(2), m.group(3))
+            candidates = [
+                raw,
+                "https://ghproxy.net/" + raw,
+                "https://gh-proxy.com/" + raw,
+            ]
+    last_err = None
+    for u in candidates:
+        try:
+            if _HAS_REQUESTS:
+                r = requests.get(u, timeout=8, headers=_UA)
+                if r.status_code == 200:
+                    txt = r.text
+                    return txt[:max_bytes] if txt else ""
+            else:
+                req = urllib.request.Request(u, headers=_UA)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = resp.read(max_bytes)
+                    return data.decode("utf-8", "replace")
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    return ""
 
 
 # 文件名 → 模型目录 关键词推断（与前端 guessFolderName 一致，用于提示建议目录）
@@ -364,7 +493,7 @@ def infer_folder_hint(filename):
 
 
 def _repo_readme_verify(repo_url, node_name):
-    """用 jsDelivr 抓取仓库 README，验证是否真的包含该节点名。
+    """抓取仓库 README，验证是否真的包含该节点名（多通道，国内镜像兜底）。
     返回 True(确认) / False(未找到) / None(无法验证，如无 README)"""
     try:
         m = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url or "")
@@ -374,18 +503,11 @@ def _repo_readme_verify(repo_url, node_name):
         target = node_name.lower()
         for branch in ("main", "master"):
             try:
-                if _HAS_REQUESTS:
-                    r = requests.get(
-                        "https://cdn.jsdelivr.net/gh/%s/%s@%s/README.md" % (owner, repo, branch),
-                        timeout=5, headers=_UA)
-                    if r.status_code == 200:
-                        return target in (r.text or "").lower()
-                else:
-                    req = urllib.request.Request(
-                        "https://cdn.jsdelivr.net/gh/%s/%s@%s/README.md" % (owner, repo, branch),
-                        headers=_UA)
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        return target in resp.read().decode("utf-8", "replace").lower()
+                txt = _http_get_text(
+                    "https://cdn.jsdelivr.net/gh/%s/%s@%s/README.md" % (owner, repo, branch),
+                    max_bytes=64 * 1024)
+                if txt:
+                    return target in txt.lower()
             except Exception:
                 continue
     except Exception:
@@ -393,62 +515,137 @@ def _repo_readme_verify(repo_url, node_name):
     return None
 
 
+def _node_search_queries(class_type):
+    """为缺失节点生成多组 GitHub 搜索查询（按命中率从高到低排列）"""
+    words = _camel_words(class_type)
+    # 拼出更合理的仓库名关键词：取前 2-3 个有意义的词
+    # 例：MiniMaxH3AVDecodeT8 -> [Mini, Max, H3, AV, Decode, T8]
+    #     → 候选 "MiniMax H3" / "minimax-h3" / "MiniMaxH3"
+    w = [x for x in words if len(x) >= 2]
+    phrases = [class_type]
+    if w:
+        phrases.append(" ".join(w[:3]))
+        phrases.append(" ".join(w[:2]))
+        phrases.append("".join(w[:3]))
+    for i in range(len(words) - 1):
+        phrases.append(words[i] + " " + words[i + 1])
+    if words:
+        phrases.append(max(words, key=len))
+
+    queries = []
+    # 1) 代码注册关键字 + 节点名（命中即确认仓库源码定义了该节点）
+    queries.append('NODE_CLASS_MAPPINGS "%s"' % class_type)
+    # 2) 仓库名/描述/README 含节点名
+    queries.append('%s in:name,description,readme' % class_type)
+    # 3) 拆词后的仓库名关键词（GitHub repo search 只搜仓库名/描述，必须用宽词）
+    for p in phrases[:3]:
+        if p != class_type:
+            queries.append('comfyui %s in:name,description,readme' % p)
+    # 4) 宽松兜底
+    if words:
+        queries.append("ComfyUI " + max(words, key=len))
+    return queries
+
+
+def _verify_node_candidate(repo, class_type, wrong):
+    """验证单个候选仓库：代码级 > README 级。
+    返回候选 dict（含 verify 字段）或 None（明确未找到 / 无法验证 → 剔除）。
+
+    注意：GitHub 兜底搜索的候选必须能证明自己包含该节点，否则不推荐——
+    无法验证源码（verify_level=none）的仓库与节点关系未知，直接推荐容易误装。
+    """
+    if repo in wrong:
+        return None
+    code_hit = _repo_code_verify(repo, class_type)
+    if code_hit is True:
+        return {"repo": repo, "title": "", "match": "github-search",
+                "verify": True, "verify_level": "code"}
+    if code_hit is False:
+        # 源码里明确没有该节点 → 剔除，避免误装
+        return None
+    # 无法验证源码（树/抓取失败）→ README 提及作为弱证据；README 也没有 → 剔除
+    verify = _repo_readme_verify(repo, class_type)
+    if verify is True:
+        return {"repo": repo, "title": "", "match": "github-search",
+                "verify": True, "verify_level": "readme"}
+    return None
+
+
 def suggest_node_sources(class_type):
     """缺失节点的安装来源建议（应用社区纠错表）。
 
-    1. Manager 数据库精确/模式匹配
-    2. 用户确认过的正确来源（置顶）
-    3. GitHub 搜索兜底 + 代码级/README 实据验证
-    被标记的错误候选自动剔除。
+    1. Manager 数据库精确/模式匹配（官方库，最可靠）
+    2. comfy.icu 目录站精确查询（按节点类名收录，补 Manager 滞后空白）
+    3. 用户确认过的正确来源（置顶）
+    4. GitHub 搜索兜底：优先代码注册关键字，逐候选做代码级/README 实据验证，
+       明确未找到的候选剔除，无法验证的降权排后。
+    返回 (results, advice)；results 为空时 advice 给出可行行动指引。
     """
     from . import corrections
 
     results = []
     wrong = corrections.wrong_repos(class_type)
+
+    # 1) Manager 官方数据库
     for r in find_repo_for_node(class_type):
         if r["repo"] not in wrong:
             results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
 
-    # 用户确认过的正确来源置顶
+    # 2) comfy.icu 目录站（新热节点常未被 Manager 收录，这里补上）
+    if not results:
+        for r in search_comfyicu(class_type):
+            if r["repo"] not in wrong:
+                results.append({"repo": r["repo"], "title": r["title"], "match": "comfyicu"})
+
+    # 3) 用户确认过的正确来源置顶
     for repo in corrections.correct_repos(class_type):
         if repo not in wrong:
             results.append({"repo": repo, "title": "★ 用户确认", "match": "user-correct"})
 
+    advice = None
     if not results:
-        words = _camel_words(class_type)
-        phrases = [class_type]
-        for i in range(len(words) - 1):
-            phrases.append(words[i] + " " + words[i + 1])
-        if words:
-            phrases.append(max(words, key=len))
-
-        queries = ["ComfyUI " + class_type]
-        for p in phrases:
-            queries.append('ComfyUI "%s" in:readme' % p)
-        if words:
-            queries.append("ComfyUI " + max(words, key=len))
-
-        for q in queries:
-            hits = search_github_repos(q)
-            if hits:
-                for g in hits:
-                    repo = g["repo"]
-                    if repo in wrong:
-                        continue
-                    code_hit = _repo_code_verify(repo, class_type)
-                    if code_hit is None:
-                        verify = _repo_readme_verify(repo, class_type)
-                        level = "readme" if verify is True else "none" if verify is None else "miss"
-                    elif code_hit:
-                        verify, level = True, "code"
-                    else:
-                        verify, level = False, "miss"
-                    results.append({
-                        "repo": repo, "title": g["title"], "match": "github-search",
-                        "verify": verify, "verify_level": level,
-                    })
+        for q in _node_search_queries(class_type):
+            hits = search_github_repos(q, limit=5)
+            if not hits:
+                continue
+            candidates = []
+            for g in hits:
+                c = _verify_node_candidate(g["repo"], class_type, wrong)
+                if c:
+                    c["title"] = g["title"]
+                    c["stars"] = g.get("stars")
+                    candidates.append(c)
+            if candidates:
+                results = candidates
                 break
-    return results[:6]
+
+    # 排序：comfy.icu / manager-db / 用户确认 > 代码验证 > README 验证 > 未验证；有 star 的参考排前
+    def _rank(x):
+        src = {"comfyicu": 0, "manager-db": 0, "user-correct": 0,
+               "github-search": 1}.get(x.get("match"), 2)
+        level = {"code": 0, "readme": 1, "none": 2}.get(x.get("verify_level"), 3)
+        stars = x.get("stars") or 0
+        return (src, level, -stars)
+    results = sorted(results, key=_rank)
+    results = results[:6]
+
+    if not results:
+        advice = {
+            "found": False,
+            "class_type": class_type,
+            "reason": ("已查询：ComfyUI-Manager 官方节点库、comfy.icu 节点目录、GitHub 仓库搜索"
+                       "（含 NODE_CLASS_MAPPINGS 注册关键字）。未找到提供该节点的可信仓库。"),
+            "tips": [
+                "1️⃣ 在 comfy.icu 查节点：comfy.icu/node/%s（ComfyUI 节点目录站，按节点名精确收录）" % class_type,
+                "2️⃣ 在 GitHub 搜代码：github.com/search?q=NODE_CLASS_MAPPINGS+\"%s\"&type=code" % class_type,
+                "3️⃣ 在 GitHub 搜仓库：github.com/search?q=%s&type=repositories" % class_type,
+                "4️⃣ 若工作流来自某个分享页/教程，回原页面找「安装依赖/自定义节点」说明",
+                "5️⃣ 检查节点名拼写：大小写、下划线/连字符、前后缀（如 ComfyUI_ 前缀常被省略）",
+                "6️⃣ 部分节点是「幽灵节点」（工作流作者误写或已删除）：可用画布定位删除后重建",
+                "7️⃣ 去 ComfyUI 社区问：Discord（comfyanonymous 官方）或国内 Q 群/论坛贴出节点名",
+            ],
+        }
+    return results, advice
 
 
 # ---------------------------------------------------------------- 模型查询
@@ -572,15 +769,17 @@ def search_advice(filename, folder_hint=None, results_count=0):
     return {
         "found": False,
         "query": q,
-        "reason": ("已查询：Manager 官方模型库（564+ 条目）、Civitai、HuggingFace（国内镜像）。"
-                   "未找到同名或近似候选——通常因为模型较新/较冷门、文件名较特殊，或需要登录下载。"),
+        "reason": ("已查询：Manager 官方模型库（564+ 条目）、魔搭 ModelScope、Civitai、"
+                   "HuggingFace（国内镜像）。未找到同名或近似候选——通常因为模型较新/较冷门、"
+                   "文件名较特殊，或需要登录下载。"),
         "tips": [
             "1️⃣ 用下方「手动搜索」改更短的关键词重试（去掉版本号、精度后缀、作者前缀）",
             "2️⃣ 浏览器打开 civitai.com 直接搜索模型名",
             "3️⃣ 浏览器打开 hf-mirror.com 搜索（国内可达的 HuggingFace 镜像）",
-            "4️⃣ 如果模型来自某个工作流分享页/教程，回原页面找下载链接",
-            "5️⃣ 检查缺失文件名的拼写（下划线/连字符/大小写）",
-            "6️⃣ Civitai 与 HuggingFace 部分模型需登录下载：浏览器登录后用「复制链接」手动下载",
+            "4️⃣ 浏览器打开 modelscope.cn 搜索（魔搭，国内直达）",
+            "5️⃣ 如果模型来自某个工作流分享页/教程，回原页面找下载链接",
+            "6️⃣ 检查缺失文件名的拼写（下划线/连字符/大小写）",
+            "7️⃣ Civitai 与 HuggingFace 部分模型需登录下载：浏览器登录后用「复制链接」手动下载",
         ],
     }
 
@@ -629,6 +828,76 @@ def search_modelscope_by_url(url, target_name=None):
         out.append({"source": "modelscope", "title": "%s/%s · %s" % (owner, name, label),
                     "url": dl, "kind": "file", "filename": label, "match": match})
     return out, ("%s/%s" % (owner, name))
+
+
+def search_modelscope(filename, folder_hint=None, limit=3):
+    """魔搭（ModelScope）按文件名关键词自动搜索模型 → 匹配文件直链。
+
+    实测接口：PUT /api/v1/dolphin/agg（body {"Query": kw, "Target": ""}），
+    无需登录、无需 cookie，返回全站聚合结果，模型在 Data.Data.Model.Models。
+    魔搭搜索是分词匹配：camelCase 连写（如 waiIllustriousSDXL）召回差，
+    空格分词（如 "wai illustrious sdxl"）召回好，因此优先拆词查询。
+    对候选模型逐个调用文件列表 API 精确匹配目标文件（复用 search_modelscope_by_url），
+    返回与 Civitai/HF 一致结构的候选列表；无匹配时返回 []。
+    """
+    base_q = _base_query(filename)
+    if not base_q:
+        return []
+    target = os.path.basename(str(filename)).lower()
+    target_stem = os.path.splitext(target)[0]
+
+    # 构建查询候选：1) camelCase 拆词空格连接（召回最好） 2) 原始关键词
+    words = _camel_words(base_q)
+    spaced = " ".join(words).strip() if words else base_q
+    query_candidates = []
+    for q in (spaced, base_q):
+        if q and q not in query_candidates:
+            query_candidates.append(q)
+    # 拆词后若剩下多个独立词，再加一版只取前两个词（更宽召回）
+    if len(words) > 2:
+        short = " ".join(words[:2]).strip()
+        if short and short not in query_candidates:
+            query_candidates.append(short)
+
+    # 归一化：去掉所有非字母数字字符后比对，兼容 连字符/下划线/空格 等写法差异
+    q_norm = re.sub(r"[^a-z0-9]", "", base_q.lower())
+    stem_norm = re.sub(r"[^a-z0-9]", "", (target_stem or "").lower())
+
+    out = []
+    for qi, query in enumerate(query_candidates):
+        try:
+            data = _http_put_json(MODELSCOPE_SEARCH_URL, {"Query": query, "Target": ""})
+            models = (((data.get("Data") or {}).get("Data") or {}).get("Model") or {}).get("Models") or []
+        except Exception:
+            models = []
+        if not models:
+            continue
+
+        # 只处理有限个候选，避免对无关仓库反复请求文件列表
+        for m in models[: limit * 3]:
+            owner = m.get("Path")
+            name = m.get("Name")
+            if not owner or not name:
+                continue
+            # 快速过滤：候选模型名含关键词才值得进一步解析（减少无效请求）
+            combined = re.sub(r"[^a-z0-9]", "", (str(owner) + " " + str(name)).lower())
+            if q_norm and q_norm not in combined and stem_norm and stem_norm not in combined:
+                continue
+            try:
+                hits, _mid = search_modelscope_by_url(
+                    "https://modelscope.cn/models/%s/%s" % (owner, name), filename)
+            except Exception:
+                hits = []
+            for h in hits or []:
+                # 只收 exact / near，避免把无关仓库的其它文件全塞进来
+                if h.get("match") in ("exact", "near"):
+                    h["title"] = "%s/%s" % (owner, name)
+                    out.append(h)
+            if len(out) >= limit:
+                break
+        if out:
+            break  # 第一个有结果的查询即可
+    return out[:limit]
 
 
 def search_huggingface(filename, folder_hint=None, limit=4):
@@ -713,12 +982,13 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
         return cached
 
     out = []
-    ex = ThreadPoolExecutor(max_workers=3)
+    ex = ThreadPoolExecutor(max_workers=4)
     try:
         futures = [
             ex.submit(find_model_db_matches, filename),
             ex.submit(search_civitai, filename, folder_hint),
             ex.submit(search_huggingface, filename),
+            ex.submit(search_modelscope, filename, folder_hint),
         ]
         try:
             for f in as_completed(futures, timeout=budget):
@@ -733,8 +1003,8 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
     finally:
         ex.shutdown(wait=False)
 
-    # 排序：官方库 > Civitai > HuggingFace，去重
-    order = {"manager-db": 0, "civitai": 1, "huggingface": 2}
+    # 排序：官方库 > 魔搭 > Civitai > HuggingFace，去重
+    order = {"manager-db": 0, "modelscope": 1, "civitai": 2, "huggingface": 3}
     out.sort(key=lambda x: order.get(x.get("source"), 3))
     seen, results = set(), []
     for item in out:

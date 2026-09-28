@@ -6,9 +6,10 @@ ComfyUI 体检中心：**缺失节点/模型检测 + 一键自动安装 + 模型
 
 | 功能 | 说明 |
 |------|------|
-| 🔎 缺失节点检测 | 对比当前工作流引用的节点与已安装节点，在 ComfyUI-Manager 数据库中反查安装仓库 |
+| 🔎 缺失节点检测 | 对比当前工作流引用的节点与已安装节点，反查安装仓库：**ComfyUI-Manager 数据库 → comfy.icu 节点目录（新热节点优先）→ GitHub 代码级验证**（源码 NODE_CLASS_MAPPINGS 实据），搜不到时给出行动指引 |
 | ⚡ 节点一键安装 | 每个缺失节点带「自动安装」按钮，支持一键批量 git clone 到 custom_nodes（浅克隆、重名跳过、域名白名单） |
-| 📦 缺失模型检测 | 检查 ckpt / lora / vae / controlnet / unet / clip 等引用是否存在，缺失时从 Manager 模型库、Civitai、HuggingFace（国内自动走 hf-mirror 镜像）搜索下载地址 |
+| 📦 缺失模型检测 | 检查 ckpt / lora / vae / controlnet / unet / clip 等引用是否存在，缺失时四路并发搜索：Manager 模型库 → **魔搭 ModelScope（免登录）** → Civitai → HuggingFace（国内自动走 hf-mirror 镜像） |
+| 🇨🇳 魔搭自动搜索 | 直接调魔搭公开搜索接口（无需登录/cookie），按文件名关键词给出模型直链；也支持粘贴魔搭模型页链接解析 |
 | ⬇ 模型直接下载 | 检测到缺失模型后可一键下载到对应的 models 目录，带实时进度；支持手动关键词搜索 |
 | 🕰 老旧模型检索 | 按"最后修改时间"扫描超过 N 天（默认 90，可调）未变动的模型 |
 | 🛡 调用记录防误删 | 自动记录每个模型的真实加载时间（挂钩 folder_paths.get_full_path），近期仍在使用的模型标红警告，批量删除自动跳过 |
@@ -77,7 +78,7 @@ ComfyUI-MissingDoctor/
 ├── api.py               # /md/* HTTP 路由
 ├── checker.py           # 缺失节点/模型检测核心
 ├── workflow_parser.py   # 工作流解析（API 格式 + UI 格式）
-├── remote_lookup.py     # 下载地址查询（Manager db / Civitai / HF 镜像 / GitHub）
+├── remote_lookup.py     # 下载地址查询（Manager db / 魔搭 / Civitai / HF 镜像 / GitHub / comfy.icu）
 ├── aged.py              # 老旧模型扫描（合并调用记录）
 ├── usage_tracker.py     # 模型调用时间记录（挂钩 get_full_path）
 ├── downloader.py        # 模型下载器（进度/断点保护/白名单）

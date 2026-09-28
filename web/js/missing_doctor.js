@@ -561,6 +561,37 @@ function renderNodesTab(body) {
         }
     }
 
+    // 节点搜索不到时的可行行动指引（后端 node_advice；缺省时给静态幽灵提示）
+    function renderNodeAdvice(advice, ct) {
+        if (!advice) {
+            return el("div", { class: "md-card", style: "border-color:#6e5a20;margin-top:6px" }, [
+                el("div", { class: "md-title", style: "color:#ffd54a", text: "👻 疑似幽灵节点" }),
+                el("div", { class: "md-meta", style: "color:#ccc",
+                    text: "未找到提供该节点的插件或仓库。这类节点通常是：AI 编造的节点名 / 原作者私有插件 / 旧版已改名或删除的节点。" }),
+                el("div", { style: "font-size:12px;color:#eee;line-height:1.8;margin-top:6px",
+                    text: "处理建议：① 在画布上查看该节点连接了什么，用基础节点或真实等效节点替代；② 向工作流作者确认所需插件；③ ComfyUI 双击空白处搜节点名，仍找不到即为幽灵节点。" }),
+            ]);
+        }
+        const ul = el("div", { style: "font-size:12px;line-height:1.9" });
+        (advice.tips || []).forEach((t, i) => {
+            ul.appendChild(el("div", {
+                style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
+                text: t }));
+        });
+        return el("div", { class: "md-card", style: "border-color:#6e5a20;margin-top:6px" }, [
+            el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没找到可信候选，试试这些办法：" }),
+            el("div", { class: "md-meta", text: advice.reason || "" }),
+            ul,
+            el("div", { class: "md-row", style: "margin:6px 0 2px" }, [
+                el("span", { text: "🔎 直接搜索：", style: "font-size:12px;color:#aaa" }),
+                el("a", { class: "md-link", href: "https://github.com/search?q=" + encodeURIComponent('NODE_CLASS_MAPPINGS "' + ct + '"') + "&type=code", target: "_blank", text: "GitHub 代码搜索" }),
+                el("a", { class: "md-link", href: "https://github.com/search?q=" + encodeURIComponent(ct) + "&type=repositories", target: "_blank", text: "GitHub 仓库搜索" }),
+                el("a", { class: "md-link", href: "https://www.google.com/search?q=" + encodeURIComponent('ComfyUI ' + ct + ' custom node'), target: "_blank", text: "Google" }),
+                el("a", { class: "md-link", href: "https://www.bing.com/search?q=" + encodeURIComponent('ComfyUI ' + ct + ' 节点'), target: "_blank", text: "Bing" }),
+            ]),
+        ]);
+    }
+
     function renderResult(data) {
         resultBox.innerHTML = "";
         const summary = el("div", { class: "md-row" }, [
@@ -588,12 +619,12 @@ function renderNodesTab(body) {
             return;
         }
 
-        // 一键安装：每个缺失节点取第一个 manager-db 匹配的候选仓库
+        // 一键安装：每个缺失节点取第一个 manager-db / comfyicu 匹配的候选仓库
         const batch = [];
         const noMatch = [];
         for (const ct of data.missing_nodes) {
             const sug = (data.suggestions && data.suggestions[ct]) || [];
-            const best = sug.find(s => s.match === "manager-db" && s.repo);
+            const best = sug.find(s => (s.match === "manager-db" || s.match === "comfyicu") && s.repo);
             if (best) batch.push({ url: best.repo, title: ct });
             else noMatch.push(ct);
         }
@@ -620,13 +651,15 @@ function renderNodesTab(body) {
                 const repo = s.repo || "";
                 const badge = s.match === "manager-db"
                     ? el("span", { class: "md-pill ok", title: "来自 ComfyUI-Manager 数据库匹配", text: "📚 库匹配" })
-                    : (s.verify === true && s.verify_level === "code"
-                        ? el("span", { class: "md-pill ok", title: "已在仓库源码中找到该节点的 NODE_CLASS_MAPPINGS 定义，可放心安装", text: "✓ 代码验证" })
-                        : (s.verify === true
-                            ? el("span", { class: "md-pill ok", title: "该仓库 README 中提及此节点名（建议点链接核对后安装）", text: "📖 README 提及" })
-                            : (s.verify === false
-                                ? el("span", { class: "md-pill bad", title: "仓库源码/README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
-                                : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证源码", text: "🔍 搜索候选" }))));
+                    : (s.match === "comfyicu"
+                        ? el("span", { class: "md-pill ok", title: "来自 comfy.icu 节点目录（按节点类名精确收录，新热节点优先）", text: "🗂 comfy.icu" })
+                        : (s.verify === true && s.verify_level === "code"
+                            ? el("span", { class: "md-pill ok", title: "已在仓库源码中找到该节点的 NODE_CLASS_MAPPINGS 定义，可放心安装", text: "✓ 代码验证" })
+                            : (s.verify === true
+                                ? el("span", { class: "md-pill ok", title: "该仓库 README 中提及此节点名（建议点链接核对后安装）", text: "📖 README 提及" })
+                                : (s.verify === false
+                                    ? el("span", { class: "md-pill bad", title: "仓库源码/README 中未找到此节点名，请核对后再安装", text: "⚠️ 待核对" })
+                                    : el("span", { class: "md-pill info", title: "GitHub 关键词搜索，未能验证源码", text: "🔍 搜索候选" })))));
                 return el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px" }, [
                     el("a", { class: "md-link", href: repo, target: "_blank",
                               text: `${s.title || repo}` }),
@@ -674,16 +707,7 @@ function renderNodesTab(body) {
                 ]),
                 el("div", { class: "md-meta", text: "候选安装来源：" }),
                 ...(links.length ? links : [
-                    el("div", { class: "md-card", style: "border-color:#6e5a20;margin-top:6px" }, [
-                        el("div", { class: "md-title", style: "color:#ffd54a",
-                            text: "👻 疑似幽灵节点" }),
-                        el("div", { class: "md-meta", style: "color:#ccc",
-                            text: "在 ComfyUI-Manager 数据库与 GitHub 的多次搜索中都没有找到任何提供该节点的插件或仓库。这类节点通常是：" }),
-                        el("div", { style: "font-size:12px;color:#aaa;line-height:1.8;margin-top:4px",
-                            text: "· AI 生成 / 仿写工作流时编造的节点名\n· 原作者使用了自己未发布的私有插件\n· 旧版插件中已被改名或删除的节点" }),
-                        el("div", { style: "font-size:12px;color:#eee;line-height:1.8;margin-top:6px",
-                            text: "处理建议：① 查看该节点在画布上连接了什么，删除后用基础节点或真实等效节点替代；② 向工作流作者确认所需插件；③ 若坚信存在，可在 ComfyUI 双击空白处搜索节点名，仍找不到即为幽灵节点。" }),
-                    ]),
+                    renderNodeAdvice((data.node_advice && data.node_advice[ct]) || null, ct),
                 ]),
             ]));
         }
@@ -907,7 +931,7 @@ function renderModelsTab(body) {
     const dlStatus = el("div");
     const runBtn = el("button", { class: "md-btn", text: "🔍 检测当前工作流", onclick: () => run() });
     const searchInput = el("input", { class: "md-input", style: "min-width:260px",
-        placeholder: "搜索模型名（支持粘贴魔搭 ModelScope 模型页链接，直接给出下载直链）",
+        placeholder: "搜索模型名（自动查魔搭/Civitai/HF；粘贴魔搭模型页链接可直接解析直链）",
         onkeydown: (e) => { if (e.key === "Enter") doSearch(); } });
     const searchResult = el("div");
 
