@@ -16,6 +16,7 @@ import os
 import re
 import json
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeout
 from urllib.parse import quote, urlencode
@@ -256,6 +257,9 @@ def find_repo_for_node(class_type):
     return out[:5]
 
 
+_ICU_SEM = threading.BoundedSemaphore(3)   # comfy.icu 并发限流：批量缺失节点同时查询时防止被打挂
+
+
 def search_comfyicu(node_name):
     """comfy.icu 目录站精确查询：按节点类名找 GitHub 仓库。
 
@@ -263,7 +267,8 @@ def search_comfyicu(node_name):
     很多新热节点还没进 ComfyUI-Manager 数据库，但 comfy.icu 已收录，
     用它可补上 Manager 数据库的滞后空白。
     页面 URL 稳定：https://comfy.icu/node/{节点名}，抓 HTML 提取 git clone 仓库。
-    返回 [{"repo", "title", "match": "comfyicu"}] 或 []。结果缓存 24h。
+    返回 [{"repo", "title", "match": "comfyicu"}] 或 []。命中结果缓存 24h。
+    并发限流 3 + 超时重试 1 次（检测工作流时会对多个缺失节点并发查询）。
     """
     try:
         cache_key = "icu_%s" % re.sub(r"[^a-zA-Z0-9_-]", "_", str(node_name).lower())[:100]
@@ -274,31 +279,35 @@ def search_comfyicu(node_name):
         cache_key = None
 
     result = []
-    try:
-        url = "https://comfy.icu/node/" + quote(str(node_name))
-        if _HAS_REQUESTS:
-            r = requests.get(url, timeout=HTTP_TIMEOUT, headers=_UA)
-            if r.status_code == 200:
-                html = r.text or ""
-            else:
-                html = ""
-        else:
-            req = urllib.request.Request(url, headers=_UA)
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-                html = resp.read().decode("utf-8", "replace")
-        if html:
-            # 优先取 git clone 指令（最明确的仓库地址），其次任意 github 链接
-            m = re.search(r"git clone\s+https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
-            if not m:
-                m = re.search(r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
-            if m:
-                repo = "https://github.com/" + m.group(1)
-                result = [{"repo": repo, "title": m.group(1), "match": "comfyicu"}]
-    except Exception:
-        result = []
+    url = "https://comfy.icu/node/" + quote(str(node_name))
+    for attempt in (1, 2):
+        try:
+            with _ICU_SEM:
+                if _HAS_REQUESTS:
+                    r = requests.get(url, timeout=HTTP_TIMEOUT, headers=_UA)
+                    html = (r.text or "") if r.status_code == 200 else ""
+                else:
+                    req = urllib.request.Request(url, headers=_UA)
+                    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                        html = resp.read().decode("utf-8", "replace")
+            if html:
+                # 优先取 git clone 指令（最明确的仓库地址），其次任意 github 链接
+                m = re.search(r"git clone\s+https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
+                if not m:
+                    m = re.search(r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", html)
+                if m:
+                    repo = "https://github.com/" + m.group(1)
+                    result = [{"repo": repo, "title": m.group(1), "match": "comfyicu"}]
+            break
+        except Exception:
+            if attempt == 1:
+                time.sleep(1.0)   # 短退避后重试一次（瞬时超时常见于并发高峰）
+                continue
+            result = []
 
     try:
-        if cache_key is not None:
+        if cache_key is not None and result:
+            # 只缓存非空结果：空结果不缓存，下次自动重试（网络偶发失败不应锁死 24h）
             _save_cache(cache_key, result)
     except Exception:
         pass
@@ -591,10 +600,13 @@ def suggest_node_sources(class_type):
         if r["repo"] not in wrong:
             results.append({"repo": r["repo"], "title": r["title"], "match": "manager-db"})
 
-    # 2) comfy.icu 目录站（新热节点常未被 Manager 收录，这里补上）
-    if not results:
+    # 2) comfy.icu 目录站：Manager 无「精确命中」时都查。
+    #    不能只看 results 是否为空——nodename_pattern 模糊规则可能误命中，
+    #    挡住 comfy.icu 的真命中（如 MiniMaxH3*T8 系列节点）。
+    exact_hit = bool(get_node_index()["exact"].get(str(class_type).lower()))
+    if not exact_hit:
         for r in search_comfyicu(class_type):
-            if r["repo"] not in wrong:
+            if r["repo"] not in wrong and all(r["repo"] != x["repo"] for x in results):
                 results.append({"repo": r["repo"], "title": r["title"], "match": "comfyicu"})
 
     # 3) 用户确认过的正确来源置顶
@@ -604,20 +616,31 @@ def suggest_node_sources(class_type):
 
     advice = None
     if not results:
+        # GitHub 兜底：预算内搜多个查询词，跨查询汇总候选；
+        # 代码级实据（NODE_CLASS_MAPPINGS 注册）优先于 README 提及，
+        # 避免 readme 级弱候选抢先占位（如 Nana_H3 抢占 MiniMaxH3*T8 的真源 T8mars）。
+        deadline = time.time() + 20.0
+        best, seen_repos = [], set()
         for q in _node_search_queries(class_type):
+            if time.time() > deadline:
+                break
             hits = search_github_repos(q, limit=5)
-            if not hits:
-                continue
-            candidates = []
             for g in hits:
+                if time.time() > deadline:
+                    break
+                if g["repo"] in seen_repos:
+                    continue
+                seen_repos.add(g["repo"])
                 c = _verify_node_candidate(g["repo"], class_type, wrong)
                 if c:
                     c["title"] = g["title"]
                     c["stars"] = g.get("stars")
-                    candidates.append(c)
-            if candidates:
-                results = candidates
-                break
+                    best.append(c)
+            if any(c.get("verify_level") == "code" for c in best):
+                break   # 已有代码级实据，无需继续搜
+        best.sort(key=lambda c: ({"code": 0, "readme": 1, "none": 2}.get(c.get("verify_level"), 3),
+                                 -(c.get("stars") or 0)))
+        results = best[:6]
 
     # 排序：comfy.icu / manager-db / 用户确认 > 代码验证 > README 验证 > 未验证；有 star 的参考排前
     def _rank(x):
