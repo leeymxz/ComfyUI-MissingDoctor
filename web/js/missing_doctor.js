@@ -901,15 +901,6 @@ function renderAdvice(advice, container) {
     container.appendChild(card);
     container.appendChild(siteRow);
 }
-    // 国内站点搜索按钮组
-    const siteRow = el("div", { class: "md-row", style: "margin:4px 0 10px" }, [
-        el("span", { text: "🔎 去这些站点搜索「" + kw + "」：", style: "font-size:12px;color:#aaa" }),
-    ]);
-    sites.forEach(([label, url]) => {
-        siteRow.appendChild(el("a", { class: "md-link", href: url, target: "_blank", text: label }));
-    });
-    container.appendChild(siteRow);
-}
 
 function renderModelsTab(body) {
     const resultBox = el("div");
