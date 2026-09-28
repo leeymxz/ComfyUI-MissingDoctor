@@ -864,7 +864,6 @@ function isRepoCandidate(d) {
 
 function renderAdvice(advice, container) {
     if (!advice) return;
-    // 国内站点一键搜索引导（始终显示）
     const kw = (advice.query || "").trim();
     const enc = encodeURIComponent(kw || "");
     const sites = [
@@ -873,25 +872,35 @@ function renderAdvice(advice, container) {
         ["🌍 Civitai", "https://civitai.com/search/" + enc],
         ["🌍 HF 镜像", "https://hf-mirror.com/search?fulltext=1&q=" + enc],
     ];
+    // 站点按钮组始终显示（有候选时也可去其他站点找更合适的版本）
+    const siteRow = el("div", { class: "md-row", style: "margin:4px 0 10px" }, [
+        el("span", { text: "🔎 去这些站点搜索「" + kw + "」：", style: "font-size:12px;color:#aaa" }),
+    ]);
+    sites.forEach(([label, url]) => {
+        siteRow.appendChild(el("a", { class: "md-link", href: url, target: "_blank", text: label }));
+    });
     if (advice.found) {
         container.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
             el("div", { class: "md-title", style: "color:#7fdc9a", text: "💡 候选可信度说明" }),
             el("div", { style: "font-size:12px;color:#aaa", text: advice.tips.join("  ") }),
         ]));
-    } else {
-        const card = el("div", { class: "md-card", style: "border-color:#6e5a20" }, [
-            el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没有找到现成候选，但还有这些办法：" }),
-            el("div", { class: "md-meta", text: advice.reason || "" }),
-        ]);
-        const ul = el("div", { style: "font-size:12px;line-height:1.9" });
-        (advice.tips || []).forEach((t, i) => {
-            ul.appendChild(el("div", {
-                style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
-                text: t }));
-        });
-        card.appendChild(ul);
-        container.appendChild(card);
+        container.appendChild(siteRow);
+        return;
     }
+    const card = el("div", { class: "md-card", style: "border-color:#6e5a20" }, [
+        el("div", { class: "md-title", style: "color:#ffd54a", text: "🤔 没有找到现成候选，但还有这些办法：" }),
+        el("div", { class: "md-meta", text: advice.reason || "" }),
+    ]);
+    const ul = el("div", { style: "font-size:12px;line-height:1.9" });
+    (advice.tips || []).forEach((t, i) => {
+        ul.appendChild(el("div", {
+            style: (i === 0 ? "color:#8ab4ff;font-weight:600" : "color:#ccc"),
+            text: t }));
+    });
+    card.appendChild(ul);
+    container.appendChild(card);
+    container.appendChild(siteRow);
+}
     // 国内站点搜索按钮组
     const siteRow = el("div", { class: "md-row", style: "margin:4px 0 10px" }, [
         el("span", { text: "🔎 去这些站点搜索「" + kw + "」：", style: "font-size:12px;color:#aaa" }),
