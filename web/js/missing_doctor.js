@@ -1605,6 +1605,55 @@ async function loadAbout(box) {
     }
 }
 
+function versionGt(remote, local) {
+    // 语义化版本比较：remote > local 返回 true（兼容 v 前缀与位数不同的段）
+    const p = (s) => String(s || "").replace(/^v/i, "").split(".").map(n => parseInt(n, 10) || 0);
+    const a = p(remote), b = p(local);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const x = a[i] || 0, y = b[i] || 0;
+        if (x !== y) return x > y;
+    }
+    return false;
+}
+
+async function runSelfUpdate(out) {
+    // 一键更新：启动 -> 轮询进度 -> 完成提示重启
+    try {
+        await mdFetch("/md/self_update", { method: "POST" });
+    } catch (e) { mdAlert("更新启动失败：" + e.message); return; }
+    const poll = setInterval(async () => {
+        let s;
+        try { s = (await mdFetch("/md/self_update_status")).data; } catch (e) { return; }
+        if (s.status === "pulling") {
+            out.innerHTML = "";
+            out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在 git pull 更新插件..."]));
+            return;
+        }
+        clearInterval(poll);
+        out.innerHTML = "";
+        if (s.status === "done") {
+            out.appendChild(el("div", { class: "md-card", style: "border-color:#2f5c3a" }, [
+                el("div", { class: "md-title", style: "color:#7fdc9a",
+                    text: "✅ 更新完成（当前代码版本 v" + (s.new_version || "?") + "）" }),
+                el("div", { class: "md-meta", style: "color:#ffb060",
+                    text: "⚠️ 请重启 ComfyUI 使新版本生效" }),
+                el("details", { style: "margin-top:4px" }, [
+                    el("summary", { style: "cursor:pointer;font-size:11px;color:#888", text: "查看 git 输出" }),
+                    el("div", { style: "font-family:monospace;font-size:11px;color:#aaa;white-space:pre-wrap;word-break:break-all", text: s.log || "" }),
+                ]),
+            ]));
+        } else {
+            out.appendChild(el("div", { class: "md-card", style: "border-color:#7a3030" }, [
+                el("div", { class: "md-title", style: "color:#e06c6c", text: "❌ 更新失败：" + (s.error || "未知错误") }),
+                el("details", { style: "margin-top:4px" }, [
+                    el("summary", { style: "cursor:pointer;font-size:11px;color:#888", text: "查看 git 输出" }),
+                    el("div", { style: "font-family:monospace;font-size:11px;color:#aaa;white-space:pre-wrap;word-break:break-all", text: s.log || "" }),
+                ]),
+            ]));
+        }
+    }, 1200);
+}
+
 async function checkUpdate(box) {
     const out = box.querySelector("#md-update-result");
     if (!out) return;
@@ -1612,22 +1661,44 @@ async function checkUpdate(box) {
     out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在连接 GitHub..."]));
     let local = MD_VER_CACHE ? MD_VER_CACHE.version : "?";
     try {
-        const r = await fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/commits?per_page=1");
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const j = await r.json();
+        // 并行请求最新提交与最新 Release
+        const [rCommits, rRel] = await Promise.all([
+            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/commits?per_page=1"),
+            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/releases/latest").catch(() => null),
+        ]);
+        if (!rCommits.ok) throw new Error("HTTP " + rCommits.status);
+        const j = await rCommits.json();
         const sha = j[0].sha.slice(0, 7);
         const date = (j[0].commit.committer.date || "").replace("T", " ").slice(0, 16);
         const msg = (j[0].commit.message || "").split("\n")[0].slice(0, 80);
+        let relTag = "";
+        if (rRel && rRel.ok) {
+            const rj = await rRel.json();
+            relTag = (rj.tag_name || "").replace(/^v/i, "");
+        }
+        const hasNew = relTag && versionGt(relTag, local);
+        const row = el("div", { class: "md-row" }, [
+            el("span", { class: "md-pill info", text: "本地版本 v" + local }),
+            relTag ? el("span", { class: "md-pill " + (hasNew ? "bad" : "ok"),
+                text: "远端 Release v" + relTag + (hasNew ? "（有更新）" : "（已是最新）") }) : null,
+            el("span", { class: "md-pill info", text: "远端提交 " + sha + "（" + date + "）" }),
+        ]);
+        const card = el("div", { class: "md-card" }, [row, el("div", { class: "md-meta", text: msg })]);
+        if (hasNew) {
+            card.appendChild(el("div", { class: "md-row", style: "margin-top:6px" }, [
+                el("button", { class: "md-btn", text: "⚡ 一键更新到 v" + relTag,
+                    title: "在插件目录执行 git pull（不覆盖本地修改），完成后需重启 ComfyUI",
+                    onclick: () => runSelfUpdate(out) }),
+                el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "自动 git pull，完成后提示重启" }),
+            ]));
+        } else if (relTag) {
+            card.appendChild(el("div", { class: "md-meta", style: "color:#7fdc9a", text: "✓ 已是最新版本" }));
+        } else {
+            card.appendChild(el("div", { class: "md-meta", style: "color:#ffb060",
+                text: "如远端有更新：在 custom_nodes/ComfyUI-MissingDoctor 目录执行 git pull，然后重启 ComfyUI" }));
+        }
         out.innerHTML = "";
-        out.appendChild(el("div", { class: "md-card" }, [
-            el("div", { class: "md-row" }, [
-                el("span", { class: "md-pill info", text: "本地版本 v" + local }),
-                el("span", { class: "md-pill info", text: "远端最新提交 " + sha + "（" + date + "）" }),
-            ]),
-            el("div", { class: "md-meta", text: msg }),
-            el("div", { class: "md-meta", style: "color:#ffb060",
-                text: "如远端有更新：在 custom_nodes/ComfyUI-MissingDoctor 目录执行 git pull，然后重启 ComfyUI" }),
-        ]));
+        out.appendChild(card);
     } catch (e) {
         out.innerHTML = "";
         out.appendChild(el("div", { class: "md-error",

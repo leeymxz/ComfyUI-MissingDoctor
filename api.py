@@ -9,6 +9,8 @@ ComfyUI-MissingDoctor - HTTP API 路由
 - GET  /md/aged_models      扫描老旧模型（?days=90&sort=oldest|size）
 - GET  /md/cleanup_preview  清理目标预览（temp/output/pycache/logs）
 - POST /md/cleanup          执行清理（必须 confirm=true）
+- POST /md/self_update      插件自更新（插件目录 git pull --ff-only，后台执行）
+- GET  /md/self_update_status  自更新进度查询
 """
 
 import asyncio
@@ -31,6 +33,7 @@ from . import installer
 from . import mapper
 from . import pkgmgr
 from . import remote_lookup
+from . import self_update
 
 
 def _json(data, status=200):
@@ -477,6 +480,27 @@ async def h_feedback(request):
         return _err(e)
 
 
+async def h_self_update(request):
+    """插件自更新：在插件目录 git pull --ff-only（后台执行）"""
+    try:
+        ok, msg = await asyncio.to_thread(self_update.start_update)
+        return _json({"status": "ok" if ok else "error",
+                      "message": msg,
+                      "data": self_update.get_status()})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
+async def h_self_update_status(request):
+    """自更新进度查询"""
+    try:
+        return _json({"status": "ok", "data": self_update.get_status()})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
 # ---------------------------------------------------------------- 注册
 
 ROUTES = [
@@ -500,6 +524,8 @@ ROUTES = [
     ("GET", "/md/pip_status", h_pip_status),
     ("GET", "/md/version", h_version),
     ("POST", "/md/feedback", h_feedback),
+    ("POST", "/md/self_update", h_self_update),
+    ("GET", "/md/self_update_status", h_self_update_status),
     ("GET", "/md/duplicates", h_duplicates),
     ("GET", "/md/mapper_scan", h_mapper_scan),
     ("POST", "/md/mapper_apply", h_mapper_apply),
