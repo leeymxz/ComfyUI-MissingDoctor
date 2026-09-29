@@ -1623,7 +1623,7 @@ async function runSelfUpdate(out) {
     } catch (e) { mdAlert("更新启动失败：" + e.message); return; }
     const poll = setInterval(async () => {
         let s;
-        try { s = (await mdFetch("/md/self_update_status")).data; } catch (e) { return; }
+        try { s = await mdFetch("/md/self_update_status"); } catch (e) { return; }
         if (s.status === "pulling") {
             out.innerHTML = "";
             out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在 git pull 更新插件..."]));
@@ -1660,12 +1660,18 @@ async function checkUpdate(box) {
     out.innerHTML = "";
     out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在连接 GitHub..."]));
     let local = MD_VER_CACHE ? MD_VER_CACHE.version : "?";
+    // GitHub API 加 10s 超时：网络不通时快速报错而不是一直转圈（浏览器 fetch 默认无超时）
+    const ac = new AbortController();
+    const gTimer = setTimeout(() => ac.abort(), 10000);
     try {
         // 并行请求最新提交与最新 Release
         const [rCommits, rRel] = await Promise.all([
-            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/commits?per_page=1"),
-            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/releases/latest").catch(() => null),
+            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/commits?per_page=1",
+                  { signal: ac.signal }),
+            fetch("https://api.github.com/repos/leeymxz/ComfyUI-MissingDoctor/releases/latest",
+                  { signal: ac.signal }).catch(() => null),
         ]);
+        clearTimeout(gTimer);
         if (!rCommits.ok) throw new Error("HTTP " + rCommits.status);
         const j = await rCommits.json();
         const sha = j[0].sha.slice(0, 7);
@@ -1700,9 +1706,13 @@ async function checkUpdate(box) {
         out.innerHTML = "";
         out.appendChild(card);
     } catch (e) {
+        clearTimeout(gTimer);
         out.innerHTML = "";
+        const msg = (e && e.name === "AbortError")
+            ? "连接 GitHub 超时（10s），请检查网络/代理后重试"
+            : "无法连接 GitHub（" + (e && e.message ? e.message : e) + "）";
         out.appendChild(el("div", { class: "md-error",
-            text: "无法连接 GitHub（" + e.message + "）。请手动到仓库主页查看是否有更新：github.com/leeymxz/ComfyUI-MissingDoctor" }));
+            text: msg + "。也可手动到仓库主页查看更新：github.com/leeymxz/ComfyUI-MissingDoctor" }));
     }
 }
 
