@@ -673,6 +673,20 @@ def suggest_node_sources(class_type):
 
 # ---------------------------------------------------------------- 模型查询
 
+# 知名模型别名表：工作流常见引用名与仓库内实际文件名不一致时的已验证官方直链。
+# 例如官方 FLUX.1-schnell 仓库内文件叫 ae.safetensors，而大量工作流引用 flux-ae.safetensors，
+# 文件名对不上导致四路搜索都拿不到"精确匹配"，这里直接给出可下载源（下载时仍保存为引用名）。
+KNOWN_MODEL_ALIASES = {
+    "flux-ae.safetensors": [
+        {"source": "modelscope", "kind": "file", "match": "exact",
+         "title": "魔搭 AI-ModelScope/FLUX.1-schnell · ae.safetensors（官方镜像，已验证）",
+         "url": "https://modelscope.cn/api/v1/models/AI-ModelScope/FLUX.1-schnell/repo?FilePath=ae.safetensors&Revision=master"},
+        {"source": "modelscope", "kind": "file", "match": "exact",
+         "title": "魔搭 black-forest-labs/FLUX.1-schnell · ae.safetensors（官方，已验证）",
+         "url": "https://modelscope.cn/api/v1/models/black-forest-labs/FLUX.1-schnell/repo?FilePath=ae.safetensors&Revision=master"},
+    ],
+}
+
 _model_db = None
 
 
@@ -997,6 +1011,13 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
     - 用户标记错误的候选剔除；确认正确的置顶
     """
     from . import corrections
+
+    # 知名别名表优先（在缓存检查之前）：官方文件名与引用名不一致时（如 flux-ae.safetensors）
+    # 直接返回已验证直链，秒出「⬇ 下载到模型库」按钮，不再依赖四路网络搜索。
+    _alias = KNOWN_MODEL_ALIASES.get(os.path.basename(str(filename)).lower())
+    if _alias:
+        _wrong = corrections.wrong_repos(os.path.basename(filename))
+        return [a for a in _alias if a.get("url") not in _wrong]
 
     budget = QUERY_BUDGET if budget is None else float(budget)
     cache_key = "sugg_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or "")
