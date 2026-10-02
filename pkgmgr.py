@@ -132,6 +132,8 @@ def _run(args):
         })
 
     def worker():
+        tail = []   # worker 作用域持有，_pip_once 内只 append/del（不重新绑定，避免 UnboundLocalError）
+
         def _pip_once(cmd_args):
             proc = subprocess.Popen(
                 [sys.executable, "-m", "pip"] + cmd_args,
@@ -144,13 +146,12 @@ def _run(args):
                 if line:
                     tail.append(line)
                     if len(tail) > 60:
-                        tail = tail[-60:]
+                        del tail[:-60]   # 原地裁剪（不能用切片赋值，会变成局部变量导致 UnboundLocalError）
                     with _lock:
                         _state["output_tail"] = tail[-40:]
             return proc.wait()
 
         try:
-            tail = []
             code = _pip_once(args)
 
             # 构建后端缺失（如 BackendUnavailable: Cannot import 'hatchling.build'）
