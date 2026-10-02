@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 // 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
 // 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
-const MD_JS_VER = "1.4.6";
+const MD_JS_VER = "1.4.7";
 
 const MD = {
     overlay: null,
@@ -499,41 +499,80 @@ async function startNodeInstall(items, hintEl) {
 }
 
 // 在画布上定位并高亮指定类型的节点
+// - 递归搜索主图与子图（subgraph）
+// - 同类型多个节点时循环定位（每点一次切到下一个）
+// - 优先用 ComfyUI 官方居中 API，兜底自算偏移
+const MD_LOCATE_IDX = {};   // ct -> 上次定位的节点序号（循环定位用）
+
+function _collectNodesDeep(graph, ct, out, seen) {
+    if (!graph || seen.has(graph)) return;
+    seen.add(graph);
+    for (const n of (graph._nodes || [])) {
+        if (n && n.type === ct) out.push(n);
+    }
+    // 新版 ComfyUI 子图：节点可能挂在 .subgraph / 全局 _subgraphs
+    for (const n of (graph._nodes || [])) {
+        const sg = n && (n.subgraph || (n.properties && n.properties.subgraph));
+        if (sg && sg._nodes && !seen.has(sg)) _collectNodesDeep(sg, ct, out, seen);
+    }
+    for (const sg of (graph._subgraphs || [])) {
+        if (sg && sg._nodes && !seen.has(sg)) _collectNodesDeep(sg, ct, out, seen);
+    }
+}
+
+function _flashNode(n) {
+    const old = n.bgcolor;
+    let i = 0;
+    const tick = () => {
+        n.bgcolor = (i % 2 === 0) ? "#6e2b0a" : old;
+        i++;
+        if (i < 6) setTimeout(tick, 450);
+        else { n.bgcolor = old; n.selected = false; }
+        if (n.graph && typeof n.graph.setDirtyCanvas === "function") n.graph.setDirtyCanvas(true, true);
+    };
+    n.selected = true;
+    tick();
+}
+
 function locateNode(ct, ghost) {
-    const graph = window.app && window.app.graph;
-    const nodes = (graph && graph._nodes || []).filter(n => n.type === ct);
-    if (!nodes.length) {
+    const app = window.app;
+    const graph = app && app.graph;
+    const c = app && app.canvas;
+    if (!graph) return;
+    const found = [];
+    _collectNodesDeep(graph, ct, found, new Set());
+    if (!found.length) {
         mdAlert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
         return;
     }
-    // 高亮 + 闪烁
-    nodes.forEach(n => {
-        n.selected = true;
-        const old = n.bgcolor;
-        n.bgcolor = "#6e2b0a";
-        setTimeout(() => { n.bgcolor = old; n.selected = false; }, 1800);
-    });
+    // 多个同名节点循环定位：每次点击切到下一个
+    const idx = (MD_LOCATE_IDX[ct] || 0) % found.length;
+    MD_LOCATE_IDX[ct] = idx + 1;
+    const node = found[idx];
     try {
-        const c = window.app.canvas;
-        if (!c || !c.ds) return;
-        const node = nodes[0];
-        // 子图安全的节点局部坐标
-        const rel = (typeof graph.computeRelativePosition === "function")
-            ? graph.computeRelativePosition(node)
-            : [node.pos[0], node.pos[1]];
-        const size = node.size || [220, 60];
         // 缩放保底：太小时先放大，保证能看到
-        if ((c.ds.scale || 1) < 0.6) c.ds.scale = 0.6;
-        const s = c.ds.scale;
-        const w = (c.canvas && (c.canvas.width || c.canvas.clientWidth)) || window.innerWidth;
-        const h = (c.canvas && (c.canvas.height || c.canvas.clientHeight)) || window.innerHeight;
-        // 节点中心 → 视口中心（用的是局部坐标 × scale 的绝对居中，配合相对坐标避免子图漂移）
-        c.ds.offset = [w / 2 - (rel[0] + size[0] / 2) * s,
-                       h / 2 - (rel[1] + size[1] / 2) * s];
-        if (typeof c.setDirty === "function") c.setDirty(true, true);
-        else c.dirty_canvas = true;
+        if (c && c.ds && (c.ds.scale || 1) < 0.6) c.ds.scale = 0.6;
+        let centered = false;
+        if (c && typeof c.centerOnNode === "function") {
+            c.centerOnNode(node); centered = true;               // ComfyUI/litegraph 官方 API
+        } else if (c && c.ds && typeof c.ds.focusNode === "function") {
+            c.ds.focusNode(node); centered = true;
+        } else if (c && c.ds) {
+            // 兜底：自算偏移（节点中心 → 视口中心）
+            const rel = (typeof graph.computeRelativePosition === "function")
+                ? graph.computeRelativePosition(node) : [node.pos[0], node.pos[1]];
+            const size = node.size || [220, 60];
+            const s = c.ds.scale || 1;
+            const w = (c.canvas && (c.canvas.width || c.canvas.clientWidth)) || window.innerWidth;
+            const h = (c.canvas && (c.canvas.height || c.canvas.clientHeight)) || window.innerHeight;
+            c.ds.offset = [w / 2 - (rel[0] + size[0] / 2) * s,
+                           h / 2 - (rel[1] + size[1] / 2) * s];
+            centered = true;
+        }
+        if (centered && typeof c.setDirty === "function") c.setDirty(true, true);
     } catch (e) { console.warn("[MissingDoctor] 定位失败", e); }
-    if (graph && typeof graph.setDirtyCanvas === "function") graph.setDirtyCanvas(true, true);
+    if (typeof graph.setDirtyCanvas === "function") graph.setDirtyCanvas(true, true);
+    _flashNode(node);
     // 自动关闭面板，让用户直接看到画布上的高亮节点
     closeDialog();
 }
@@ -705,7 +744,7 @@ function renderNodesTab(body) {
                 ]),
                 el("div", { class: "md-row", style: "margin-bottom:6px" }, [
                     el("button", { class: "md-btn", text: "📍 在画布上定位",
-                        title: "高亮并居中到该节点（幽灵节点同样可定位检查）",
+                        title: "高亮并居中到该节点；画布上有多个同名节点时，每点一次切换定位到下一个（幽灵节点同样可定位）",
                         onclick: () => locateNode(ct) }),
                     el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "点击后自动跳到画布位置" }),
                 ]),
