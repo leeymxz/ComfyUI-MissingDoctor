@@ -109,13 +109,14 @@ def _validate_custom_dir(dest_dir):
     return True, ""
 
 
-def start_download(url, folder_type, filename=None, dest_dir=None):
-    """启动一个下载任务。返回 {ok} 或 {error}。
+def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=False):
+    """启动一个下载任务。返回 {ok} / {exists, path, size} / {error}。
 
     dest_dir: 可选。
       - 提供注册路径中的绝对路径 → 精确选择（同一目录名可能注册多个路径）
       - 提供自定义路径 → 通过黑名单校验后使用（任意文件夹）
       - 未提供 → 使用该 folder_type 注册的第一个路径
+    overwrite: 目标文件已存在时是否覆盖下载（False 时返回 exists 状态，由前端确认）
     """
     global _thread
 
@@ -172,8 +173,13 @@ def start_download(url, folder_type, filename=None, dest_dir=None):
         return {"error": "不支持的文件类型（仅允许模型文件）: %s" % name}
 
     target = os.path.join(dest_dir, name)
-    if os.path.exists(target):
-        return {"error": "目标文件已存在: %s" % name}
+    if os.path.exists(target) and not overwrite:
+        try:
+            size = os.path.getsize(target)
+        except OSError:
+            size = 0
+        # 友好状态（非报错）：文件已存在——常见于刚下载完成但缺失列表还是旧检测结果
+        return {"exists": True, "path": target, "size": size, "filename": name}
 
     with _lock:
         _state.update({

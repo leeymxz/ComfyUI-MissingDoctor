@@ -703,6 +703,43 @@ KNOWN_MODEL_ALIASES = {
     ],
 }
 
+# HF URL 拼接名：ComfyUI 系下载工具从 HuggingFace 链接生成引用名时的常见格式
+# 例：kijai_MiniMax-H3-experimental_resolve_main_minimax_h3_video_vae_int8_convrot.safetensors
+#     → 作者 kijai / 仓库 MiniMax-H3-experimental / 真实文件 minimax_h3_video_vae_int8_convrot.safetensors
+_HF_URLNAME_RE = re.compile(r"^(?P<prefix>.+?)_resolve_main_(?P<fname>.+)$")
+
+
+def _try_hf_urlname(filename):
+    """解析 '作者_仓库_resolve_main_文件名' 风格引用名，在 HF 镜像上验证真实文件后给出直链。
+
+    验证失败（404/网络不通）一律返回空——不给未经验证的下载链接。
+    """
+    base = os.path.basename(str(filename))
+    m = _HF_URLNAME_RE.match(base)
+    if not m:
+        return []
+    prefix, fname = m.group("prefix"), m.group("fname")
+    if "_" not in prefix or "/" in fname or fname.startswith("_"):
+        return []
+    author, repo = prefix.split("_", 1)
+    if not author or not repo or len(fname) < 4:
+        return []
+    # 扩展名白名单（与下载器一致）
+    if os.path.splitext(fname)[1].lower() not in (".safetensors", ".sft", ".gguf", ".ckpt", ".pt", ".bin"):
+        return []
+    for host in ("https://hf-mirror.com", "https://huggingface.co"):
+        url = "%s/%s/%s/resolve/main/%s" % (host, author, repo, fname)
+        try:
+            r = requests.head(url, timeout=8, headers=_UA, allow_redirects=True)
+            if r.status_code in (200, 301, 302, 303):
+                return [{"source": "huggingface", "kind": "file", "match": "exact",
+                         "title": "%s/%s · %s（由引用名解析验证）" % (author, repo, fname),
+                         "url": url}]
+        except Exception:
+            continue
+    return []
+
+
 _model_db = None
 
 
@@ -1034,6 +1071,19 @@ def suggest_model_downloads(filename, folder_hint=None, budget=None):
     if _alias:
         _wrong = corrections.wrong_repos(os.path.basename(filename))
         return [a for a in _alias if a.get("url") not in _wrong]
+
+    # HF URL 拼接名解析（kijai_仓库_resolve_main_文件.safetensors 等）：
+    # 解析出真实仓库文件并 HEAD 验证，命中即秒出下载按钮
+    _alt = _try_hf_urlname(filename)
+    if _alt:
+        _wrong = corrections.wrong_repos(os.path.basename(filename))
+        _alt = [a for a in _alt if a.get("url") not in _wrong]
+        if _alt:
+            try:
+                _save_cache("sugg_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or ""), _alt)
+            except Exception:
+                pass
+            return _alt
 
     budget = QUERY_BUDGET if budget is None else float(budget)
     cache_key = "sugg_%s_%s" % (os.path.basename(str(filename)).lower(), folder_hint or "")

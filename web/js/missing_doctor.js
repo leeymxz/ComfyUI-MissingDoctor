@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 // 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
 // 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
-const MD_JS_VER = "1.4.9";
+const MD_JS_VER = "1.4.10";
 
 const MD = {
     overlay: null,
@@ -859,8 +859,23 @@ async function startModelDownload(url, filename, defaultFolder, hintEl) {
             folderName = o.name;
         }
         try {
-            const start = await mdFetch("/md/download_start", {
+            let start = await mdFetch("/md/download_start", {
                 method: "POST", body: { url, filename, folder_type: folderName, dest_dir: dest } });
+            // 目标文件已存在：常见于刚下载完成但缺失列表还是旧检测结果 → 让用户选择覆盖或保留
+            if (start && start.exists) {
+                const sizeText = (typeof fmtBytes === "function" && start.size) ? fmtBytes(start.size) : "";
+                const overwrite = await mdConfirm(
+                    `文件已存在于目标目录：${start.filename || filename}` + (sizeText ? `（${sizeText}）` : "")
+                    + "。可能是刚下载完成。要覆盖重新下载吗？（取消 = 保留现有文件，重新检测即可从缺失列表移除）");
+                if (!overwrite) {
+                    picker.remove();
+                    if (hintEl) hintEl.innerHTML = "";
+                    mdAlert("✅ 该文件已在目标目录中，无需重复下载。点「检测当前工作流」刷新缺失列表即可。");
+                    return;
+                }
+                start = await mdFetch("/md/download_start", {
+                    method: "POST", body: { url, filename, folder_type: folderName, dest_dir: dest, overwrite: true } });
+            }
             if (!start.ok) { mdAlert("下载启动失败：" + (start.error || "未知错误")); return; }
             picker.remove();
             // 轮询进度
