@@ -28,6 +28,24 @@ _thread = None
 
 PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]*(\s*[=<>!~]=?\s*[A-Za-z0-9._\-]+)*$")
 
+# 国内镜像源（pip 默认 pypi.org 在国内经常超时，导致源码包构建依赖 hatchling 下载失败）
+# 可用环境变量覆盖：MD_PIP_INDEX=<url> 换源；MD_PIP_INDEX=none 禁用（使用用户自己的 pip 配置）
+DEFAULT_PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_INDEX = os.environ.get("MD_PIP_INDEX", DEFAULT_PIP_INDEX).strip()
+
+# 构建后端缺失的报错特征（pip 源码构建 wheel 时）
+_BUILD_BACKEND_KEYWORDS = ("backendunavailable", "cannot import 'hatchling",
+                           "cannot import 'setuptools", "no module named 'hatchling",
+                           "no module named 'setuptools", "no module named 'wheel'")
+
+
+def _install_extra_args():
+    """install 类命令的公共参数：镜像源 + 优先二进制轮子（减少源码构建）"""
+    extra = ["--prefer-binary"]
+    if PIP_INDEX and PIP_INDEX.lower() != "none":
+        extra += ["-i", PIP_INDEX]
+    return extra
+
 
 def status():
     with _lock:
@@ -61,7 +79,7 @@ def install_packages(packages):
         pkgs.append(v)
     if not pkgs:
         return {"error": "未指定要安装的包"}
-    return _run(["install", "--disable-pip-version-check", "--no-input"] + pkgs)
+    return _run(["install", "--disable-pip-version-check", "--no-input"] + _install_extra_args() + pkgs)
 
 
 def install_requirements_file(path):
@@ -80,7 +98,7 @@ def install_requirements_file(path):
             return {"error": "路径不在 custom_nodes 内，已拒绝"}
     else:
         return {"error": "无法定位 custom_nodes 目录"}
-    return _run(["install", "--disable-pip-version-check", "--no-input", "-r", rp])
+    return _run(["install", "--disable-pip-version-check", "--no-input"] + _install_extra_args() + ["-r", rp])
 
 
 def uninstall_package(name):
@@ -114,14 +132,13 @@ def _run(args):
         })
 
     def worker():
-        try:
+        def _pip_once(cmd_args):
             proc = subprocess.Popen(
-                [sys.executable, "-m", "pip"] + args,
+                [sys.executable, "-m", "pip"] + cmd_args,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
                 creationflags=CREATE_NO_WINDOW,
             )
-            tail = []
             for line in proc.stdout or []:
                 line = line.rstrip()
                 if line:
@@ -130,7 +147,28 @@ def _run(args):
                         tail = tail[-60:]
                     with _lock:
                         _state["output_tail"] = tail[-40:]
-            code = proc.wait()
+            return proc.wait()
+
+        try:
+            tail = []
+            code = _pip_once(args)
+
+            # 构建后端缺失（如 BackendUnavailable: Cannot import 'hatchling.build'）
+            # → 自动安装 hatchling/setuptools/wheel 后重试一次
+            joined = "\n".join(tail).lower()
+            if code != 0 and any(k in joined for k in _BUILD_BACKEND_KEYWORDS):
+                tail.append("-- 检测到 Python 构建后端缺失（hatchling/setuptools），自动补装后重试...")
+                with _lock:
+                    _state["output_tail"] = tail[-40:]
+                    _state["cmd"] = "python -m pip " + " ".join(args) + "（补装构建依赖后重试中）"
+                code_fix = _pip_once(["install", "--disable-pip-version-check", "--no-input",
+                                      "--prefer-binary"] + (["-i", PIP_INDEX] if PIP_INDEX and PIP_INDEX.lower() != "none" else [])
+                                     + ["hatchling", "setuptools", "wheel"])
+                if code_fix == 0:
+                    code = _pip_once(args)
+                else:
+                    tail.append("-- 构建依赖补装失败（可能仍是网络问题），请尝试升级 pip 后重试")
+
             with _lock:
                 _state["running"] = False
                 _state["done"] = True
