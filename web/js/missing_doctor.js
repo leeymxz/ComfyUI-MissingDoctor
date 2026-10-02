@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 // 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
 // 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
-const MD_JS_VER = "1.4.7";
+const MD_JS_VER = "1.4.8";
 
 const MD = {
     overlay: null,
@@ -1705,7 +1705,11 @@ async function runSelfUpdate(out) {
         failCount = 0;
         if (s.status === "pulling") {
             out.innerHTML = "";
-            out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在 git pull 更新插件..."]));
+            const tail = (s.log || "").split("\n").filter(Boolean).slice(-1)[0] || "";
+            out.appendChild(el("div", { class: "md-empty" }, [
+                el("span", { class: "md-spin" }),
+                "正在更新插件..." + (tail ? tail.slice(0, 60) : ""),
+            ]));
             return;
         }
         clearInterval(poll);
