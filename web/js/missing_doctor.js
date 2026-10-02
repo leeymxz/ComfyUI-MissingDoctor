@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 // 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
 // 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
-const MD_JS_VER = "1.4.5";
+const MD_JS_VER = "1.4.6";
 
 const MD = {
     overlay: null,

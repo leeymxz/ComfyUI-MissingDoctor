@@ -36,6 +36,8 @@ QUERY_BUDGET = 25.0    # 单文件下载建议的总预算（秒），并行查�
 _UA = {"User-Agent": "ComfyUI-MissingDoctor/1.0"}
 
 MANAGER_RAW_URLS = [
+    # jsDelivr 国内可达（放最前）；raw.githubusercontent.com 国内经常不可达
+    "https://cdn.jsdelivr.net/gh/Comfy-Org/ComfyUI-Manager@main/extension-node-map.json",
     "https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main/extension-node-map.json",
     "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json",
 ]
@@ -198,7 +200,12 @@ def _manager_local_file(name):
 
 
 def get_node_index():
-    """构建 节点类名(lower) -> [{repo, title}] 索引，附 nodename_pattern 模糊规则"""
+    """构建 节点类名(lower) -> [{repo, title}] 索引，附 nodename_pattern 模糊规则
+
+    Manager 官方 extension-node-map.json 的 value 是二元数组 [nodes_list, meta_dict]，
+    旧实现只处理了 dict 形态导致官方数据库匹配完全失效（v1.4.5 及之前），
+    这里同时兼容 [list, dict] 与 dict 两种形态。
+    """
     global _node_index
     if _node_index is not None:
         return _node_index
@@ -215,9 +222,18 @@ def get_node_index():
             nodes_list = []
             pattern = None
             if isinstance(info, dict):
+                # 宽容格式: {"nodes": [...], "title_aux": ...}
                 title = info.get("title_aux") or info.get("title") or repo_url.rsplit("/", 1)[-1]
                 nodes_list = info.get("nodes") or []
                 pattern = info.get("nodename_pattern")
+            elif isinstance(info, (list, tuple)) and info:
+                # Manager 官方格式: [nodes_list, meta_dict]
+                if isinstance(info[0], list):
+                    nodes_list = info[0]
+                meta = info[1] if len(info) > 1 and isinstance(info[1], dict) else {}
+                title = (meta.get("title_aux") or meta.get("title")
+                         or repo_url.rsplit("/", 1)[-1])
+                pattern = meta.get("nodename_pattern")
             for n in nodes_list:
                 if not isinstance(n, str):
                     continue
