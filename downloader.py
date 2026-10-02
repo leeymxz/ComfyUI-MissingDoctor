@@ -178,8 +178,15 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
             size = os.path.getsize(target)
         except OSError:
             size = 0
-        # 友好状态（非报错）：文件已存在——常见于刚下载完成但缺失列表还是旧检测结果
-        return {"exists": True, "path": target, "size": size, "filename": name}
+        # 0 字节残留文件（之前失败留下的）：直接清掉继续下载，不当作"已存在"
+        if size == 0:
+            try:
+                os.remove(target)
+            except OSError:
+                pass
+        else:
+            # 友好状态（非报错）：文件已存在——常见于刚下载完成但缺失列表还是旧检测结果
+            return {"exists": True, "path": target, "size": size, "filename": name}
 
     with _lock:
         _state.update({
@@ -200,6 +207,9 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
                     raise RuntimeError("链接返回的是网页而不是文件（可能需要登录或候选已失效），请换其他候选来源")
 
                 total = int(r.headers.get("Content-Length", 0) or 0)
+                # 明确声明 Content-Length: 0 的响应 → 不可能是有效模型，提前失败
+                if (r.headers.get("Content-Length") or "").strip() == "0":
+                    raise RuntimeError("服务器返回空内容（Content-Length: 0），候选可能失效，请换其他来源")
             with _lock:
                 _state["total"] = total
 
@@ -260,6 +270,29 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
                         pass
                     err = ("链接返回的是网页/占位文件而非模型本体"
                            "（候选可能需要登录或已失效），请换其他候选来源或手动下载")
+                elif downloaded == 0:
+                    # 空响应：0 字节绝不能当成功（如 HF/Xet 或镜像返回 200 空体）
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                    err = "服务器返回了空内容（0 字节），候选可能失效，请换其他候选来源重试"
+                elif total > 0 and downloaded != total:
+                    # 不完整下载
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                    err = "下载不完整（已收 %.1f MB / 应为 %.1f MB），请重试或换其他候选来源" % (
+                        downloaded / 1024 ** 2, total / 1024 ** 2)
+                elif os.path.getsize(part) < 1024:
+                    # 模型文件不可能小于 1KB（safetensors 至少含元数据头）
+                    size_now = os.path.getsize(part) if os.path.exists(part) else 0
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                    err = "下载内容过小（%d 字节），不是有效模型文件，请换其他候选来源" % size_now
                 else:
                     # 确保目录仍在（极少数情况下载过程中被删），再原子改名
                     try:
