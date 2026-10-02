@@ -501,6 +501,15 @@ async def h_self_update_status(request):
         return _err(e)
 
 
+async def h_self_update_capable(request):
+    """一键更新能力检测：插件是否为 git 仓库 / 系统是否安装 git"""
+    try:
+        return _json({"status": "ok", "data": self_update.get_capability()})
+    except Exception as e:
+        traceback.print_exc()
+        return _err(e)
+
+
 # ---------------------------------------------------------------- 注册
 
 ROUTES = [
@@ -526,6 +535,7 @@ ROUTES = [
     ("POST", "/md/feedback", h_feedback),
     ("POST", "/md/self_update", h_self_update),
     ("GET", "/md/self_update_status", h_self_update_status),
+    ("GET", "/md/self_update_capable", h_self_update_capable),
     ("GET", "/md/duplicates", h_duplicates),
     ("GET", "/md/mapper_scan", h_mapper_scan),
     ("POST", "/md/mapper_apply", h_mapper_apply),

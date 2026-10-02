@@ -4,6 +4,10 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
+// 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
+const MD_JS_VER = "1.4.5";
+
 const MD = {
     overlay: null,
     dialogEl: null,
@@ -1585,7 +1589,7 @@ async function loadAbout(box) {
         if (!MD_VER_CACHE) MD_VER_CACHE = await mdFetch("/md/version");
         const d = MD_VER_CACHE;
         box.innerHTML = "";
-        box.appendChild(el("div", { class: "md-card" }, [
+        const verCard = el("div", { class: "md-card" }, [
             el("div", { class: "md-row" }, [
                 el("span", { class: "md-pill info", text: "MissingDoctor v" + d.version }),
                 d.comfyui ? el("span", { class: "md-pill info", text: "ComfyUI " + d.comfyui }) : null,
@@ -1598,7 +1602,14 @@ async function loadAbout(box) {
                 el("a", { class: "md-link", href: d.repo_url, target: "_blank", text: "GitHub 仓库（求 Star ⭐）" }),
             ]),
             el("div", { id: "md-update-result" }),
-        ]));
+        ]);
+        // 前端脚本版本自检：浏览器可能缓存旧 JS，导致新功能不生效/点击无反应
+        if (MD_JS_VER && d.version && MD_JS_VER !== d.version) {
+            verCard.prepend(el("div", { class: "md-error", style: "margin-bottom:6px",
+                text: "⚠️ 前端脚本版本 v" + MD_JS_VER + " ≠ 后端 v" + d.version + "，浏览器可能缓存了旧版 JS。"
+                    + "请按 Ctrl+F5 强制刷新 ComfyUI 页面后重新打开面板。" }));
+        }
+        box.appendChild(verCard);
     } catch (e) {
         box.innerHTML = "";
         box.appendChild(el("div", { class: "md-error", text: "版本读取失败：" + e.message }));
@@ -1618,12 +1629,41 @@ function versionGt(remote, local) {
 
 async function runSelfUpdate(out) {
     // 一键更新：启动 -> 轮询进度 -> 完成提示重启
+    // 点击后立即给出反馈（避免"点了没反应"的观感），任何异常都显示明确信息
+    out.innerHTML = "";
+    out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在启动更新..."]));
+    let started = false;
     try {
         await mdFetch("/md/self_update", { method: "POST" });
-    } catch (e) { mdAlert("更新启动失败：" + e.message); return; }
+        started = true;
+    } catch (e) {
+        out.innerHTML = "";
+        out.appendChild(el("div", { class: "md-card", style: "border-color:#7a3030" }, [
+            el("div", { class: "md-title", style: "color:#e06c6c", text: "❌ 更新启动失败：" + (e.message || e) }),
+            el("div", { class: "md-meta", style: "color:#ffb060",
+                text: "常见原因：插件为手动解压安装（非 git 仓库）、未安装 Git、或后端接口未注册（请先 Ctrl+F5 刷新页面）。" }),
+            el("div", { class: "md-meta", style: "color:#888",
+                text: "也可手动更新：在 custom_nodes/ComfyUI-MissingDoctor 目录执行 git pull 后重启 ComfyUI。" }),
+        ]));
+        return;
+    }
+    if (!started) return;
+    let failCount = 0;
     const poll = setInterval(async () => {
         let s;
-        try { s = await mdFetch("/md/self_update_status"); } catch (e) { return; }
+        try { s = await mdFetch("/md/self_update_status"); } catch (e) {
+            if (++failCount >= 3) {
+                clearInterval(poll);
+                out.innerHTML = "";
+                out.appendChild(el("div", { class: "md-card", style: "border-color:#7a3030" }, [
+                    el("div", { class: "md-title", style: "color:#e06c6c", text: "❌ 无法读取更新进度：" + e.message }),
+                    el("div", { class: "md-meta", style: "color:#888",
+                        text: "可手动在 custom_nodes/ComfyUI-MissingDoctor 执行 git pull 后重启。" }),
+                ]));
+            }
+            return;
+        }
+        failCount = 0;
         if (s.status === "pulling") {
             out.innerHTML = "";
             out.appendChild(el("div", { class: "md-empty" }, [el("span", { class: "md-spin" }), "正在 git pull 更新插件..."]));
@@ -1691,12 +1731,26 @@ async function checkUpdate(box) {
         ]);
         const card = el("div", { class: "md-card" }, [row, el("div", { class: "md-meta", text: msg })]);
         if (hasNew) {
+            // 一键更新能力检测：非 git 仓库 / 未装 git 时给出明确提示（而不是点击后无反应）
+            let capTip = null;
+            try {
+                const cap = await mdFetch("/md/self_update_capable");
+                if (cap && !cap.is_git_repo) {
+                    capTip = el("div", { class: "md-error", style: "margin-top:4px",
+                        text: "⚠️ 当前插件为手动解压安装（非 git 仓库），不支持一键更新。"
+                            + "请删除 custom_nodes/ComfyUI-MissingDoctor 后重新 git clone 安装。" });
+                } else if (cap && !cap.git_installed) {
+                    capTip = el("div", { class: "md-error", style: "margin-top:4px",
+                        text: "⚠️ 系统未找到 git 命令，请先安装 Git（git-scm.com）后重试。" });
+                }
+            } catch (e) { /* 后端无此接口时忽略，点击时也会给出错误提示 */ }
             card.appendChild(el("div", { class: "md-row", style: "margin-top:6px" }, [
                 el("button", { class: "md-btn", text: "⚡ 一键更新到 v" + relTag,
                     title: "在插件目录执行 git pull（不覆盖本地修改），完成后需重启 ComfyUI",
                     onclick: () => runSelfUpdate(out) }),
                 el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "自动 git pull，完成后提示重启" }),
             ]));
+            if (capTip) card.appendChild(capTip);
         } else if (relTag) {
             card.appendChild(el("div", { class: "md-meta", style: "color:#7fdc9a", text: "✓ 已是最新版本" }));
         } else {

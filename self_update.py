@@ -62,6 +62,16 @@ def get_status():
         return dict(_state)
 
 
+def get_capability():
+    """一键更新能力检测：插件是否为 git 仓库 + 系统是否安装 git"""
+    import shutil
+    return {
+        "is_git_repo": _is_git_repo(),
+        "git_installed": bool(shutil.which("git")),
+        "plugin_dir": _plugin_dir(),
+    }
+
+
 def start_update():
     """启动自更新（幂等：进行中时拒绝重复启动）。返回 (ok, message)。"""
     with _lock:
