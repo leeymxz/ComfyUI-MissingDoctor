@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 // 前端脚本版本（与后端 version.py 同步）。浏览器可能缓存旧 JS，
 // 若与后端版本不一致，面板会提示 Ctrl+F5 强制刷新。
-const MD_JS_VER = "1.4.13";
+const MD_JS_VER = "1.4.14";
 
 const MD = {
     overlay: null,
@@ -534,21 +534,18 @@ function _flashNode(n) {
     tick();
 }
 
-function locateNode(ct, ghost) {
+// 循环定位选择：同 key 多节点时每点一次切到下一个
+function _locateAmong(found, key) {
+    const idx = (MD_LOCATE_IDX[key] || 0) % found.length;
+    MD_LOCATE_IDX[key] = idx + 1;
+    return found[idx];
+}
+
+// 居中到节点 + 闪烁高亮 + 关闭面板
+function _centerAndFlash(node) {
     const app = window.app;
     const graph = app && app.graph;
     const c = app && app.canvas;
-    if (!graph) return;
-    const found = [];
-    _collectNodesDeep(graph, ct, found, new Set());
-    if (!found.length) {
-        mdAlert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
-        return;
-    }
-    // 多个同名节点循环定位：每次点击切到下一个
-    const idx = (MD_LOCATE_IDX[ct] || 0) % found.length;
-    MD_LOCATE_IDX[ct] = idx + 1;
-    const node = found[idx];
     try {
         // 缩放保底：太小时先放大，保证能看到
         if (c && c.ds && (c.ds.scale || 1) < 0.6) c.ds.scale = 0.6;
@@ -571,10 +568,57 @@ function locateNode(ct, ghost) {
         }
         if (centered && typeof c.setDirty === "function") c.setDirty(true, true);
     } catch (e) { console.warn("[MissingDoctor] 定位失败", e); }
-    if (typeof graph.setDirtyCanvas === "function") graph.setDirtyCanvas(true, true);
+    if (graph && typeof graph.setDirtyCanvas === "function") graph.setDirtyCanvas(true, true);
     _flashNode(node);
     // 自动关闭面板，让用户直接看到画布上的高亮节点
     closeDialog();
+}
+
+// 在画布上定位缺失节点：按节点类型匹配（多个同名节点循环定位）
+function locateNode(ct, ghost) {
+    const app = window.app;
+    const graph = app && app.graph;
+    if (!graph) return;
+    const found = [];
+    _collectNodesDeep(graph, ct, found, new Set());
+    if (!found.length) {
+        mdAlert("当前画布上没有找到「" + ct + "」节点（可能位于另一个标签页或尚未载入的工作流）");
+        return;
+    }
+    const node = _locateAmong(found, ct);
+    _centerAndFlash(node);
+}
+
+// 在画布上定位缺失模型：按检测到的引用节点 ID 匹配（多个引用节点循环定位）
+function _collectNodesById(graph, idSet, out, seen) {
+    if (!graph || seen.has(graph)) return;
+    seen.add(graph);
+    for (const n of (graph._nodes || [])) {
+        if (n && idSet.has(Number(n.id))) out.push(n);
+    }
+    // 子图内节点 id 与主图独立，同样递归匹配
+    for (const n of (graph._nodes || [])) {
+        const sg = n && (n.subgraph || (n.properties && n.properties.subgraph));
+        if (sg && sg._nodes && !seen.has(sg)) _collectNodesById(sg, idSet, out, seen);
+    }
+    for (const sg of (graph._subgraphs || [])) {
+        if (sg && sg._nodes && !seen.has(sg)) _collectNodesById(sg, idSet, out, seen);
+    }
+}
+
+function locateNodesByIds(nodeIds, label) {
+    const app = window.app;
+    const graph = app && app.graph;
+    if (!graph) return;
+    const idSet = new Set((nodeIds || []).map(Number));
+    const found = [];
+    _collectNodesById(graph, idSet, found, new Set());
+    if (!found.length) {
+        mdAlert("当前画布上没有找到引用「" + label + "」的节点（可能位于另一个标签页或尚未载入的工作流）");
+        return;
+    }
+    const node = _locateAmong(found, "model:" + label);
+    _centerAndFlash(node);
 }
 
 function renderNodesTab(body) {
@@ -1128,6 +1172,12 @@ function renderModelsTab(body) {
             });
             resultBox.appendChild(el("div", { class: "md-card" }, [
                 el("div", { class: "md-title", text: "❌ " + m.value }),
+                el("div", { class: "md-row", style: "margin-bottom:6px" }, [
+                    el("button", { class: "md-btn", text: "📍 在画布上定位",
+                        title: "高亮并居中到引用该模型的节点；多个节点引用同一模型时，每点一次切换定位到下一个",
+                        onclick: () => locateNodesByIds(m.node_ids, m.value) }),
+                    el("span", { class: "md-sub", style: "color:#888;font-size:12px", text: "点击后自动跳到画布位置" }),
+                ]),
                 el("div", { class: "md-meta", text:
                     `节点 ${[...new Set(m.node_ids)].join(", ")} · 输入 ${[...new Set(m.inputs)].join(", ")}` +
                     (m.folders_hint && m.folders_hint.length ? ` · 应存放于 models/${m.folders_hint.join(" 或 models/")}` : "") }),
