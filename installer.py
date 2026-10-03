@@ -77,6 +77,49 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_EXISTS = "exists"
 
+# 国内可达的 GitHub 加速镜像（clone 失败时按序重试，不修改任何用户配置）
+MIRROR_PREFIXES = [
+    "https://ghproxy.net/",
+    "https://gh-proxy.com/",
+]
+
+_NET_ERR_KEYWORDS = ("curl 28", "could not connect", "timed out", "connection refused",
+                     "could not resolve", "rpc failed", "network", "reset", "ssl")
+
+
+def _is_network_error(out):
+    low = (out or "").lower()
+    return any(k in low for k in _NET_ERR_KEYWORDS)
+
+
+def _do_clone(url, target):
+    """执行 git clone，直连失败（网络错误）时自动走镜像重试。返回 (returncode, output)。"""
+    attempts = [url]
+    # 仅对 github.com 仓库尝试镜像前缀加速
+    if url.startswith("https://github.com/"):
+        attempts += [p + url for p in MIRROR_PREFIXES]
+    last_code, last_out = 1, ""
+    for i, u in enumerate(attempts):
+        try:
+            proc = subprocess.run(
+                ["git", "clone", "--depth", "1", "--progress", u, target],
+                capture_output=True, text=True, timeout=CLONE_TIMEOUT,
+                encoding="utf-8", errors="replace",
+                creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            last_code = proc.returncode
+            last_out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        except subprocess.TimeoutExpired:
+            last_code, last_out = 1, "clone 超时（%d 秒）" % CLONE_TIMEOUT
+        except FileNotFoundError:
+            return 1, "git 命令不可用"
+        if last_code == 0:
+            return 0, last_out
+        # 仅网络类失败才继续尝试镜像；其他错误（如目录已存在）直接返回
+        if not _is_network_error(last_out):
+            return last_code, last_out
+    return last_code, last_out
+
 
 def status():
     with _lock:
@@ -142,32 +185,23 @@ def start_install(items):
             with _lock:
                 job["status"] = STATUS_CLONING
             try:
-                cmd = ["git", "clone", "--depth", "1", "--progress", job["url"], job["target"]]
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=CLONE_TIMEOUT,
-                    encoding="utf-8", errors="replace",
-                    creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
+                code, out = _do_clone(job["url"], job["target"])
                 with _lock:
-                    if proc.returncode == 0:
+                    if code == 0:
                         job["status"] = STATUS_DONE
                         # 检测插件是否自带 requirements.txt（提醒用户装依赖）
                         job["has_requirements"] = os.path.isfile(
                             os.path.join(job["target"], "requirements.txt"))
                     else:
                         job["status"] = STATUS_FAILED
-                        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-                        job["error"] = tail[-1][:300] if tail else ("git 返回码 %s" % proc.returncode)
+                        tail = out.strip().splitlines()
+                        job["error"] = tail[-1][:300] if tail else ("git 返回码 %s" % code)
                         # 失败时清理半成品目录
                         try:
                             if os.path.isdir(job["target"]) and not os.listdir(job["target"]):
                                 os.rmdir(job["target"])
                         except OSError:
                             pass
-            except subprocess.TimeoutExpired:
-                with _lock:
-                    job["status"] = STATUS_FAILED
-                    job["error"] = "克隆超时（%d 秒）" % CLONE_TIMEOUT
             except FileNotFoundError:
                 with _lock:
                     job["status"] = STATUS_FAILED

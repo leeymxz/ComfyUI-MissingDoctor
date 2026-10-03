@@ -198,7 +198,12 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
     _cancel.clear()
 
     def worker():
+        part = target + ".part"   # 提前定义（磁盘预检与下载循环共用）
         try:
+            downloaded = 0
+            total = 0
+            # 注意：流消费（iter_content）必须在 with 块内完成——
+            # with 退出会调用 r.close() 关闭未读流，块外再读只能得到空数据（0 字节假下载的根因）
             with requests.get(url, stream=True, timeout=(15, 120), headers=_UA, allow_redirects=True) as r:
                 r.raise_for_status()
                 # 预检：网页类响应直接拒绝（如 Civitai 未登录跳转、失效候选）
@@ -210,25 +215,24 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
                 # 明确声明 Content-Length: 0 的响应 → 不可能是有效模型，提前失败
                 if (r.headers.get("Content-Length") or "").strip() == "0":
                     raise RuntimeError("服务器返回空内容（Content-Length: 0），候选可能失效，请换其他来源")
-            with _lock:
-                _state["total"] = total
 
-                # 磁盘空间预检：已知大小时确保剩余空间充足（含 10% 余量）
-                if total > 0:
-                    try:
-                        import shutil as _shutil
-                        free = _shutil.disk_usage(os.path.dirname(part)).free
-                        if free < total * 1.1:
-                            raise RuntimeError(
-                                "磁盘空间不足：需要约 %.1f GB，目标盘仅剩 %.1f GB"
-                                % (total / 1024 ** 3, free / 1024 ** 3))
-                    except RuntimeError:
-                        raise
-                    except Exception:
-                        pass  # 空间检查失败不阻塞下载
+                with _lock:
+                    _state["total"] = total
 
-                part = target + ".part"
-                downloaded = 0
+                    # 磁盘空间预检：已知大小时确保剩余空间充足（含 10% 余量）
+                    if total > 0:
+                        try:
+                            import shutil as _shutil
+                            free = _shutil.disk_usage(os.path.dirname(part)).free
+                            if free < total * 1.1:
+                                raise RuntimeError(
+                                    "磁盘空间不足：需要约 %.1f GB，目标盘仅剩 %.1f GB"
+                                    % (total / 1024 ** 3, free / 1024 ** 3))
+                        except RuntimeError:
+                            raise
+                        except Exception:
+                            pass  # 空间检查失败不阻塞下载
+
                 last_t = time.time()
                 last_d = 0
                 with open(part, "wb") as f:
@@ -312,6 +316,12 @@ def start_download(url, folder_type, filename=None, dest_dir=None, overwrite=Fal
                 if err:
                     _state["target"] = None
         except Exception as e:
+            # 失败时清理 .part 残留
+            try:
+                if os.path.exists(part):
+                    os.remove(part)
+            except OSError:
+                pass
             with _lock:
                 _state["running"] = False
                 _state["done"] = True
